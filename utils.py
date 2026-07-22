@@ -37,11 +37,11 @@ def cargar_y_limpiar_datos(uploaded_file):
         meses_map = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 
                      7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
         df['Mes_Nombre'] = df['Mes_Num'].map(meses_map)
-
+        
     # Corrección: 'Zona' puede venir vacía en ~859 filas del export.
     # Sin este fillna, groupby('Zona') las descarta silenciosamente
     # y esas ventas desaparecen de los gráficos por zona sin aviso.
     if 'Zona' in df.columns:
         df['Zona'] = df['Zona'].fillna('Sin Zona')
-
+        
     return df
