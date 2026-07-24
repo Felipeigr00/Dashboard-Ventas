@@ -299,7 +299,18 @@ if uploaded_file is not None:
                         fig_prod.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickprefix="$", xaxis_tickformat=",.", height=alto_dinamico_grafico)
                         st.plotly_chart(fig_prod, width='stretch')
                         
-                        excel_prod = generar_excel_bonito({'Productos': (df_prod, {'Total Línea': 'moneda'})})
+                        # --- EXCEL: pivoteamos para que cada Periodo/Año quede en su propia columna ---
+                        # (evita que el mismo producto salga duplicado en filas por cada periodo)
+                        tabla_prod_export = df_prod.pivot(index=col_prod, columns='Periodo', values='Total Línea').fillna(0)
+                        if col_sort_tabla in tabla_prod_export.columns:
+                            tabla_prod_export = tabla_prod_export.sort_values(by=col_sort_tabla, ascending=False)
+                        tabla_prod_export = tabla_prod_export.reset_index()
+
+                        formatos_prod_export = {label_a: 'moneda'}
+                        if modo == "Comparativa (A vs B)":
+                            formatos_prod_export[label_b] = 'moneda'
+
+                        excel_prod = generar_excel_bonito({'Productos': (tabla_prod_export, formatos_prod_export)})
                         st.download_button("📥 Descargar Datos Excel", excel_prod, "grafico_todos_productos.xlsx", key="dl_prod", use_container_width=True)
                     else:
                         st.info(f"El vendedor {vend_sel_tab2} no registra ventas de productos en este periodo.")
@@ -339,7 +350,27 @@ if uploaded_file is not None:
                             fig_prod_cli.update_layout(yaxis={'categoryorder': 'total ascending'}, xaxis_tickprefix="$", xaxis_tickformat=",.", height=550)
                             st.plotly_chart(fig_prod_cli, width='stretch')
                             
-                            excel_cli_prod = generar_excel_bonito({'Clientes_Prod': (df_prod_cli_agg, {'Total Línea': 'moneda'})})
+                            # --- EXCEL: mismo criterio, pivoteamos por Periodo en columnas ---
+                            # Si existe Cod Cliente (RUT) lo incluimos junto al nombre para identificar mejor al cliente
+                            if 'Cod Cliente' in df_prod_cli.columns:
+                                df_prod_cli_export_base = df_prod_cli[df_prod_cli['Nombre Cliente'].isin(top_clientes_prod)].groupby(
+                                    ['Cod Cliente', 'Nombre Cliente', 'Periodo'], as_index=False
+                                )['Total Línea'].sum()
+                                tabla_cli_prod_export = df_prod_cli_export_base.pivot(
+                                    index=['Cod Cliente', 'Nombre Cliente'], columns='Periodo', values='Total Línea'
+                                ).fillna(0)
+                            else:
+                                tabla_cli_prod_export = df_prod_cli_agg.pivot(index='Nombre Cliente', columns='Periodo', values='Total Línea').fillna(0)
+
+                            if col_sort_tabla in tabla_cli_prod_export.columns:
+                                tabla_cli_prod_export = tabla_cli_prod_export.sort_values(by=col_sort_tabla, ascending=False)
+                            tabla_cli_prod_export = tabla_cli_prod_export.reset_index()
+
+                            formatos_cli_prod_export = {label_a: 'moneda'}
+                            if modo == "Comparativa (A vs B)":
+                                formatos_cli_prod_export[label_b] = 'moneda'
+
+                            excel_cli_prod = generar_excel_bonito({'Clientes_Prod': (tabla_cli_prod_export, formatos_cli_prod_export)})
                             st.download_button("📥 Descargar Datos Excel", excel_cli_prod, f"clientes_producto_{producto_sel[:10]}.xlsx", key="dl_cli_prod", use_container_width=True)
                         else:
                             st.info("No hay clientes registrados para este producto con los filtros actuales.")
