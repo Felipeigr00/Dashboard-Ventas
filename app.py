@@ -38,7 +38,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("☕ Consola Ejecutiva · Dark Coffee BI")
+st.title("Venta por zona F gutierrez BI")
 
 uploaded_file = st.file_uploader("Sube tu archivo de ventas (.xlsx, .xls o .csv)", type=["xlsx", "xls", "csv"])
 
