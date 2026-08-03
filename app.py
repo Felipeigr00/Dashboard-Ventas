@@ -110,15 +110,24 @@ if uploaded_files:
         # --- AVISO DE MESES POSIBLEMENTE INCOMPLETOS (export truncado en el origen) ---
         meses_incompletos = detectar_meses_incompletos(df)
         if meses_incompletos:
-            st.error(
-                "🚨 **Atención: el archivo parece venir incompleto para uno o más meses.** "
-                "Esto normalmente pasa cuando el exportador de origen (SAP/BI) corta el archivo "
-                "por límite de volumen, no porque hayan bajado las ventas.\n\n"
-                "Meses sospechosos:\n" + "\n".join(f"- {m}" for m in meses_incompletos) +
-                "\n\nSi vas a comparar alguno de estos meses contra otro periodo, los resultados "
-                "no serán confiables hasta re-exportar los datos completos (por ejemplo en tandas "
-                "más chicas por trimestre) y volver a subir el archivo."
-            )
+            id_archivos_actuales = "|".join(sorted(f.name for f in uploaded_files))
+            if st.session_state.get('aviso_incompleto_cerrado_para') != id_archivos_actuales:
+                col_aviso, col_cerrar = st.columns([30, 1])
+                with col_aviso:
+                    st.error(
+                        "🚨 **Atención: el archivo parece venir incompleto para uno o más meses.** "
+                        "Esto normalmente pasa cuando el exportador de origen (SAP/BI) corta el archivo "
+                        "por límite de volumen, no porque hayan bajado las ventas.\n\n"
+                        "Meses sospechosos:\n" + "\n".join(f"- {m}" for m in meses_incompletos) +
+                        "\n\nSi vas a comparar alguno de estos meses contra otro periodo, los resultados "
+                        "no serán confiables hasta re-exportar los datos completos (por ejemplo en tandas "
+                        "más chicas por trimestre) y volver a subir el archivo."
+                    )
+                with col_cerrar:
+                    st.write("")
+                    if st.button("✖", key="cerrar_aviso_incompleto", help="Cerrar este aviso"):
+                        st.session_state['aviso_incompleto_cerrado_para'] = id_archivos_actuales
+                        st.rerun()
 
         meses_map = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 
                      7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}

@@ -68,8 +68,11 @@ def cargar_y_limpiar_datos(uploaded_file):
         df = pd.read_csv(uploaded_file)
     else:
         xls = pd.ExcelFile(uploaded_file)
-        # Por defecto leemos la primera hoja
-        df = pd.read_excel(xls, sheet_name=0)
+        # Lee TODAS las hojas del archivo y las junta (por si alguien separó
+        # los años o los meses en distintas hojas dentro del mismo Excel,
+        # como una hoja "2025" y otra "2026").
+        hojas = [pd.read_excel(xls, sheet_name=nombre) for nombre in xls.sheet_names]
+        df = pd.concat(hojas, ignore_index=True) if len(hojas) > 1 else hojas[0]
     
     # 1. Elimina filas de resumen tipo "Total" que SAP agrega al final del export
     col_texto = next((c for c in ['Detalle', 'Cliente', 'Nombre Cliente', 'Vendedor', 'Zona'] if c in df.columns), None)
@@ -127,10 +130,37 @@ def cargar_y_limpiar_datos(uploaded_file):
                 df[c] = df[c].astype(str).str.strip().str.title()
     
     # 5. Limpieza y parseo de fechas
+    # OJO: si alguien arma el Excel a mano y la columna de fecha pierde el
+    # formato de "Fecha" en Excel, pandas la lee como un número plano
+    # (ej: 45659, el "número de serie" interno de Excel para el 2-ene-2025).
+    # pd.to_datetime normal interpretaría ese número como nanosegundos desde
+    # 1970 y arruinaría todo. Por eso primero detectamos esos números de
+    # serie de Excel (rango razonable ~año 2000 a ~2040) y los convertimos
+    # con el origen correcto (30-dic-1899), y solo el resto lo tratamos
+    # como texto de fecha normal.
+    def _convertir_fecha_mixta(serie):
+        def _es_serial_excel(v):
+            if isinstance(v, bool) or pd.isna(v):
+                return False
+            if isinstance(v, (int, float)):
+                return 36526 <= v <= 51544  # aprox. año 2000 a 2041
+            return False
+
+        mask_serial = serie.apply(_es_serial_excel)
+        resultado = pd.Series(pd.NaT, index=serie.index, dtype='datetime64[ns]')
+        if mask_serial.any():
+            resultado.loc[mask_serial] = pd.to_datetime(
+                serie[mask_serial].astype(float), unit='D', origin='1899-12-30', errors='coerce'
+            )
+        resto = ~mask_serial
+        if resto.any():
+            resultado.loc[resto] = pd.to_datetime(serie[resto], dayfirst=True, errors='coerce')
+        return resultado
+
     for col in df.columns:
         if df[col].dtype == 'object':
             try:
-                converted = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
+                converted = _convertir_fecha_mixta(df[col])
                 if converted.notna().sum() > (len(df) * 0.1): 
                     df[col] = converted
             except Exception:
