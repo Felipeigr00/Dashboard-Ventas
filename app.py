@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from utils import cargar_y_limpiar_datos, generar_excel_bonito, calcular_kpis
+from utils import cargar_y_limpiar_datos, generar_excel_bonito, calcular_kpis, detectar_meses_incompletos
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Dashboard Ejecutivo · Dark Coffee BI", layout="wide", page_icon="☕")
@@ -38,14 +38,58 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Venta por zona F gutierrez BI")
+st.title("☕ Consola Ejecutiva · Dark Coffee BI")
 
-uploaded_file = st.file_uploader("Sube tu archivo de ventas (.xlsx, .xls o .csv)", type=["xlsx", "xls", "csv"])
+uploaded_files = st.file_uploader(
+    "Sube tu(s) archivo(s) de ventas (.xlsx, .xls o .csv)",
+    type=["xlsx", "xls", "csv"],
+    accept_multiple_files=True,
+    help="Si tu histórico no cabe en un solo export (por el límite de 150.000 filas de Power BI), "
+         "sube aquí varios archivos (por trimestre, por año, etc.) y la app los junta automáticamente."
+)
 
-if uploaded_file is not None:
+if uploaded_files:
     try:
-        # --- CARGAMOS USANDO EL MÓDULO IMPORTADO ---
-        df, df_descartadas = cargar_y_limpiar_datos(uploaded_file)
+        # --- CARGAMOS Y UNIMOS TODOS LOS ARCHIVOS SUBIDOS ---
+        # (cada archivo queda en caché: si vuelves a tocar un filtro, no se
+        # vuelve a leer/limpiar desde cero, solo la primera vez es lenta)
+        listas_df, listas_desc = [], []
+        total_notas_credito = 0
+        for f in uploaded_files:
+            with st.spinner(f"Procesando {f.name}... (puede tardar la primera vez)"):
+                df_f, desc_f, nc_f = cargar_y_limpiar_datos(f)
+            total_notas_credito += nc_f
+            if not df_f.empty:
+                df_f['__Archivo Origen'] = f.name
+                listas_df.append(df_f)
+            if not desc_f.empty:
+                desc_f['__Archivo Origen'] = f.name
+                listas_desc.append(desc_f)
+
+        if not listas_df:
+            st.error("Ninguno de los archivos subidos contenía filas válidas después de la limpieza.")
+            st.stop()
+
+        df = pd.concat(listas_df, ignore_index=True)
+        df_descartadas = pd.concat(listas_desc, ignore_index=True) if listas_desc else pd.DataFrame()
+
+        if total_notas_credito > 0:
+            st.toast(f"✅ Se detectaron y forzaron a negativo {total_notas_credito:,} Notas de Crédito.")
+
+        if len(uploaded_files) > 1:
+            st.success(f"✅ Se combinaron {len(uploaded_files)} archivos: {', '.join(f.name for f in uploaded_files)}")
+
+            # --- QUITA DUPLICADOS SI DOS ARCHIVOS TRAEN LAS MISMAS FILAS (periodos que se pisan) ---
+            cols_clave_dup = [c for c in ['Fecha', 'Nro SAP', 'Folio SII', 'Cod.', 'Cod Cliente', 'Total Línea'] if c in df.columns]
+            if cols_clave_dup:
+                filas_antes = len(df)
+                df = df.drop_duplicates(subset=cols_clave_dup)
+                duplicados_quitados = filas_antes - len(df)
+                if duplicados_quitados > 0:
+                    st.warning(
+                        f"⚠️ Se detectaron y quitaron {duplicados_quitados:,} filas duplicadas entre los archivos "
+                        "(probablemente por periodos que se superponen entre los archivos que subiste)."
+                    )
         
         # Muestra la advertencia y las filas si hubo descartes
         if not df_descartadas.empty:
@@ -54,7 +98,7 @@ if uploaded_file is not None:
                 df_mostrar = df_descartadas.copy()
                 for c in df_mostrar.columns:
                     df_mostrar[c] = df_mostrar[c].astype(str)
-                st.dataframe(df_mostrar, use_container_width=True)
+                st.dataframe(df_mostrar, width='stretch')
                 excel_desc = generar_excel_bonito({'Filas Descartadas': (df_descartadas, {})})
                 st.download_button("📥 Descargar Filas Descartadas (Excel)", excel_desc, "filas_sin_fecha_valida.xlsx", key="dl_desc")
             
@@ -62,6 +106,19 @@ if uploaded_file is not None:
         if not cols_fecha:
             st.error("El archivo no contiene una columna de fecha válida (después de la limpieza).")
             st.stop()
+
+        # --- AVISO DE MESES POSIBLEMENTE INCOMPLETOS (export truncado en el origen) ---
+        meses_incompletos = detectar_meses_incompletos(df)
+        if meses_incompletos:
+            st.error(
+                "🚨 **Atención: el archivo parece venir incompleto para uno o más meses.** "
+                "Esto normalmente pasa cuando el exportador de origen (SAP/BI) corta el archivo "
+                "por límite de volumen, no porque hayan bajado las ventas.\n\n"
+                "Meses sospechosos:\n" + "\n".join(f"- {m}" for m in meses_incompletos) +
+                "\n\nSi vas a comparar alguno de estos meses contra otro periodo, los resultados "
+                "no serán confiables hasta re-exportar los datos completos (por ejemplo en tandas "
+                "más chicas por trimestre) y volver a subir el archivo."
+            )
 
         meses_map = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 
                      7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
@@ -225,7 +282,7 @@ if uploaded_file is not None:
                         st.plotly_chart(fig_zona, width='stretch')
                         
                         excel_zona = generar_excel_bonito({'Zonas': (df_zona, {'Total Línea': 'moneda'})})
-                        st.download_button("📥 Descargar Datos Excel", excel_zona, "grafico_zonas.xlsx", key="dl_zona", use_container_width=True)
+                        st.download_button("📥 Descargar Datos Excel", excel_zona, "grafico_zonas.xlsx", key="dl_zona", width='stretch')
 
                 with col_dash2:
                     titulo_vend = "🏆 Rendimiento de Todos los Vendedores"
@@ -238,7 +295,7 @@ if uploaded_file is not None:
                         st.plotly_chart(fig_vend, width='stretch')
                         
                         excel_vend = generar_excel_bonito({'Vendedores': (df_vend, {'Total Línea': 'moneda'})})
-                        st.download_button("📥 Descargar Datos Excel", excel_vend, "grafico_vendedores.xlsx", key="dl_vend", use_container_width=True)
+                        st.download_button("📥 Descargar Datos Excel", excel_vend, "grafico_vendedores.xlsx", key="dl_vend", width='stretch')
 
                 st.divider()
                 
@@ -251,7 +308,7 @@ if uploaded_file is not None:
                     st.plotly_chart(fig_cat, width='stretch')
                     
                     excel_cat = generar_excel_bonito({'Categorías': (df_cat, {'Total Línea': 'moneda'})})
-                    st.download_button("📥 Descargar Datos Excel", excel_cat, "grafico_categorias.xlsx", key="dl_cat", use_container_width=True)
+                    st.download_button("📥 Descargar Datos Excel", excel_cat, "grafico_categorias.xlsx", key="dl_cat", width='stretch')
 
             # ---------------------------------------------------------------------
             # PESTAÑA 2: ANÁLISIS DE PRODUCTOS
@@ -300,7 +357,6 @@ if uploaded_file is not None:
                         st.plotly_chart(fig_prod, width='stretch')
                         
                         # --- EXCEL: pivoteamos para que cada Periodo/Año quede en su propia columna ---
-                        # (evita que el mismo producto salga duplicado en filas por cada periodo)
                         tabla_prod_export = df_prod.pivot(index=col_prod, columns='Periodo', values='Total Línea').fillna(0)
                         if col_sort_tabla in tabla_prod_export.columns:
                             tabla_prod_export = tabla_prod_export.sort_values(by=col_sort_tabla, ascending=False)
@@ -311,7 +367,7 @@ if uploaded_file is not None:
                             formatos_prod_export[label_b] = 'moneda'
 
                         excel_prod = generar_excel_bonito({'Productos': (tabla_prod_export, formatos_prod_export)})
-                        st.download_button("📥 Descargar Datos Excel", excel_prod, "grafico_todos_productos.xlsx", key="dl_prod", use_container_width=True)
+                        st.download_button("📥 Descargar Datos Excel", excel_prod, "grafico_todos_productos.xlsx", key="dl_prod", width='stretch')
                     else:
                         st.info(f"El vendedor {vend_sel_tab2} no registra ventas de productos en este periodo.")
                 else:
@@ -350,8 +406,7 @@ if uploaded_file is not None:
                             fig_prod_cli.update_layout(yaxis={'categoryorder': 'total ascending'}, xaxis_tickprefix="$", xaxis_tickformat=",.", height=550)
                             st.plotly_chart(fig_prod_cli, width='stretch')
                             
-                            # --- EXCEL: mismo criterio, pivoteamos por Periodo en columnas ---
-                            # Si existe Cod Cliente (RUT) lo incluimos junto al nombre para identificar mejor al cliente
+                            # --- EXCEL: pivoteamos por Periodo en columnas ---
                             if 'Cod Cliente' in df_prod_cli.columns:
                                 df_prod_cli_export_base = df_prod_cli[df_prod_cli['Nombre Cliente'].isin(top_clientes_prod)].groupby(
                                     ['Cod Cliente', 'Nombre Cliente', 'Periodo'], as_index=False
@@ -371,7 +426,7 @@ if uploaded_file is not None:
                                 formatos_cli_prod_export[label_b] = 'moneda'
 
                             excel_cli_prod = generar_excel_bonito({'Clientes_Prod': (tabla_cli_prod_export, formatos_cli_prod_export)})
-                            st.download_button("📥 Descargar Datos Excel", excel_cli_prod, f"clientes_producto_{producto_sel[:10]}.xlsx", key="dl_cli_prod", use_container_width=True)
+                            st.download_button("📥 Descargar Datos Excel", excel_cli_prod, f"clientes_producto_{producto_sel[:10]}.xlsx", key="dl_cli_prod", width='stretch')
                         else:
                             st.info("No hay clientes registrados para este producto con los filtros actuales.")
                     else:
@@ -538,7 +593,7 @@ if uploaded_file is not None:
                                 file_name="clientes_nuevos_perdidos.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 key="descarga_nuevos_perdidos",
-                                use_container_width=True
+                                width='stretch'
                             )
                     else:
                         st.info("No se detectó la columna 'Nombre Cliente' para calcular clientes nuevos/perdidos.")
@@ -582,7 +637,7 @@ if uploaded_file is not None:
                         st.plotly_chart(fig_cli, width='stretch')
                         
                         excel_top_cli = generar_excel_bonito({'Top20_Clientes': (df_cli_plot, {'Total Línea': 'moneda'})})
-                        st.download_button("📥 Descargar Datos Excel", excel_top_cli, "grafico_top20_clientes.xlsx", key="dl_top_cli", use_container_width=True)
+                        st.download_button("📥 Descargar Datos Excel", excel_top_cli, "grafico_top20_clientes.xlsx", key="dl_top_cli", width='stretch')
                     else:
                         st.info("No hay ventas registradas para generar el gráfico de clientes.")
 
@@ -653,7 +708,7 @@ if uploaded_file is not None:
                         )
                         
                         excel_res_cat = generar_excel_bonito({'Resumen_Categorias': (resumen_cat_final, {f'Venta {label_a}': 'moneda', f'Venta {label_b}': 'moneda', 'Δ Venta %': 'porcentaje'})})
-                        st.download_button("📥 Descargar Tabla Excel", excel_res_cat, "tabla_categorias.xlsx", key="dl_tab_cat", use_container_width=True)
+                        st.download_button("📥 Descargar Tabla Excel", excel_res_cat, "tabla_categorias.xlsx", key="dl_tab_cat", width='stretch')
                     else:
                         cat_a = cat_a.sort_values(f'Venta {label_a}', ascending=False)
                         fila_total = pd.DataFrame([{
@@ -671,24 +726,22 @@ if uploaded_file is not None:
                             width='stretch', hide_index=True
                         )
                         excel_res_cat = generar_excel_bonito({'Resumen_Categorias': (resumen_cat_final, {f'Venta {label_a}': 'moneda'})})
-                        st.download_button("📥 Descargar Tabla Excel", excel_res_cat, "tabla_categorias.xlsx", key="dl_tab_cat_simple", use_container_width=True)
+                        st.download_button("📥 Descargar Tabla Excel", excel_res_cat, "tabla_categorias.xlsx", key="dl_tab_cat_simple", width='stretch')
 
                 st.divider()
 
                 col_tab1, col_tab2 = st.columns(2)
                 with col_tab1:
-                    # --- ELIMINADA RESTRICCIÓN DE TOP 20 ---
                     st.subheader("🛍️ Datos: Todos los Productos")
                     if col_prod and 'Total Línea' in df_dual.columns:
                         tabla_prod = df_dual.groupby([col_prod, 'Periodo'], as_index=False)['Total Línea'].sum()
-                        # Quitamos la lógica de `top_prods_gen` para usar todo el set de datos
                         tabla_prod = tabla_prod.pivot(index=col_prod, columns='Periodo', values='Total Línea').fillna(0)
                         if col_sort_tabla in tabla_prod.columns:
                             tabla_prod = tabla_prod.sort_values(by=col_sort_tabla, ascending=False)
-                        st.dataframe(tabla_prod.style.format("${:,.0f}"), use_container_width=True)
+                        st.dataframe(tabla_prod.style.format("${:,.0f}"), width='stretch')
                         
                         excel_tab_prod = generar_excel_bonito({'Productos': (tabla_prod.reset_index(), {label_a: 'moneda', label_b: 'moneda'} if modo == "Comparativa (A vs B)" else {label_a: 'moneda'})})
-                        st.download_button("📥 Descargar Excel", excel_tab_prod, "tabla_todos_productos.xlsx", key="dl_tab_prod", use_container_width=True)
+                        st.download_button("📥 Descargar Excel", excel_tab_prod, "tabla_todos_productos.xlsx", key="dl_tab_prod", width='stretch')
 
                 with col_tab2:
                     st.subheader("👥 Datos: Top 20 Clientes")
@@ -705,7 +758,7 @@ if uploaded_file is not None:
                                 width='stretch', hide_index=True
                             )
                             excel_tab_cli = generar_excel_bonito({'Top_Clientes': (top20_cli.drop(columns=['Venta Total']), {f'Venta {label_a}': 'moneda', f'Venta {label_b}': 'moneda', 'Δ Venta %': 'porcentaje'})})
-                            st.download_button("📥 Descargar Excel", excel_tab_cli, "tabla_top20_clientes.xlsx", key="dl_tab_cli", use_container_width=True)
+                            st.download_button("📥 Descargar Excel", excel_tab_cli, "tabla_top20_clientes.xlsx", key="dl_tab_cli", width='stretch')
                         else:
                             st.dataframe(
                                 top20_cli.drop(columns=['Venta Total']).style.format({
@@ -715,7 +768,7 @@ if uploaded_file is not None:
                                 width='stretch', hide_index=True
                             )
                             excel_tab_cli = generar_excel_bonito({'Top_Clientes': (top20_cli.drop(columns=['Venta Total']), {f'Venta {label_a}': 'moneda'})})
-                            st.download_button("📥 Descargar Excel", excel_tab_cli, "tabla_top20_clientes.xlsx", key="dl_tab_cli_smp", use_container_width=True)
+                            st.download_button("📥 Descargar Excel", excel_tab_cli, "tabla_top20_clientes.xlsx", key="dl_tab_cli_smp", width='stretch')
 
                 st.divider()
                 

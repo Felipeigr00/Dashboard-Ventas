@@ -1,17 +1,74 @@
 import pandas as pd
 import streamlit as st
+import re
 
-@st.cache_data
+def _limpiar_numero(valor):
+    """
+    Convierte un valor a float detectando paréntesis contables o signos menos
+    en CUALQUIER parte del texto, y usa expresiones regulares para limpiar
+    toda la "basura" o caracteres invisibles que exporta SAP.
+    """
+    if pd.isna(valor):
+        return 0.0
+    
+    if isinstance(valor, (int, float)):
+        return float(valor)
+
+    texto = str(valor).strip().replace('\xa0', ' ')
+    if texto == '':
+        return 0.0
+
+    es_negativo = False
+
+    # Detecta negativo si hay paréntesis O un signo menos en cualquier lado
+    if '(' in texto and ')' in texto:
+        es_negativo = True
+    elif '-' in texto:
+        es_negativo = True
+
+    # OPCIÓN NUCLEAR: Borra todo lo que NO sea número, coma o punto
+    texto = re.sub(r'[^\d,\.]', '', texto)
+
+    if texto == '':
+        return 0.0
+
+    # Lógica estricta para formato LATAM/Chile
+    if ',' in texto and '.' in texto:
+        if texto.rfind(',') > texto.rfind('.'):
+            # 1.234,56 -> el punto es separador de miles, la coma es decimal
+            texto = texto.replace('.', '').replace(',', '.')
+        else:
+            # 1,234.56 -> la coma es separador de miles
+            texto = texto.replace(',', '')
+    elif '.' in texto:
+        partes = texto.split('.')
+        if len(partes[-1]) == 3:
+            # Asume que es separador de miles si tiene exactamente 3 dígitos después del punto
+            texto = texto.replace('.', '')
+    elif ',' in texto:
+        # Solo hay coma (1234,56) -> es decimal
+        texto = texto.replace(',', '.')
+
+    try:
+        numero = float(texto)
+    except ValueError:
+        return 0.0
+
+    # Como la expresión regular borró los signos, "numero" siempre es positivo.
+    # Aquí le devolvemos el signo negativo si detectamos que era necesario.
+    return -numero if es_negativo else numero
+
+@st.cache_data(show_spinner=False)
 def cargar_y_limpiar_datos(uploaded_file):
     """
     Lee el archivo Excel o CSV, limpia la fila de 'Total' de SAP, 
-    normaliza textos y estandariza las fechas de forma segura.
+    normaliza textos, fuerza notas de crédito a negativo y maneja fechas.
     """
     if uploaded_file.name.endswith('.csv'):
         df = pd.read_csv(uploaded_file)
     else:
         xls = pd.ExcelFile(uploaded_file)
-        # Por defecto leemos la primera hoja, pero devolvemos el objeto xls para elegir
+        # Por defecto leemos la primera hoja
         df = pd.read_excel(xls, sheet_name=0)
     
     # 1. Elimina filas de resumen tipo "Total" que SAP agrega al final del export
@@ -20,7 +77,44 @@ def cargar_y_limpiar_datos(uploaded_file):
         mask_total = df[col_texto].astype(str).str.strip().str.lower().isin(['total', 'totales', 'total general'])
         df = df[~mask_total]
 
-    # 2. Normalización de texto y llenado de nulos en columnas de agrupación
+    # 1b. Red de seguridad: algunos exportadores (SAP/BI) agregan al final filas
+    # de texto libre como "Total", "Filtros aplicados: ..." o el aviso
+    # "Exported data exceeded the allowed volume. Some data may have been
+    # omitted." Estas filas no son datos y hay que botarlas SIEMPRE,
+    # independiente de en qué columna hayan caído.
+    patron_footer = r'exported data exceeded|filtros aplicados|allowed volume'
+    mask_footer = df.apply(
+        lambda fila: fila.astype(str).str.lower().str.contains(patron_footer, regex=True, na=False).any(),
+        axis=1
+    )
+    if mask_footer.any():
+        df = df[~mask_footer]
+
+    # 2. Limpiador numérico avanzado (Atrapa los paréntesis y signos)
+    cols_numericas = [c for c in ['Total Línea', 'Kilos', 'Cantidad'] if c in df.columns]
+    for c in cols_numericas:
+        df[c] = df[c].apply(_limpiar_numero)
+
+    # 3. REGLA ESTRICTA "INDICADOR": FORZAR NOTAS DE CRÉDITO A NEGATIVO
+    cantidad_nc = 0
+    col_ind = next((c for c in df.columns if 'indicador' in str(c).strip().lower()), None)
+    if col_ind:
+        # Busca palabras clave perdonando tildes y mayúsculas.
+        # OJO: se excluye explícitamente "débito"/"debito"/"debit" porque
+        # "Nota de Débito" también contiene la palabra "nota", y una nota
+        # de débito SUMA (no debe forzarse a negativo como una de crédito).
+        texto_ind = df[col_ind].astype(str).str.lower()
+        mask_nc = (
+            texto_ind.str.contains('crédito|credito|credit', na=False, regex=True)
+            & ~texto_ind.str.contains('débito|debito|debit', na=False, regex=True)
+        )
+        cantidad_nc = mask_nc.sum()
+
+        for c in cols_numericas:
+            # Fuerza matemáticamente a que sea negativo (-abs)
+            df.loc[mask_nc, c] = -df.loc[mask_nc, c].abs()
+
+    # 4. Normalización de texto y llenado de nulos en columnas de agrupación
     cols_agrupacion = ['Zona', 'Categoría', 'Vendedor', 'Nombre Cliente']
     col_prod = next((c for c in ['Detalle', 'Producto', 'Descripción', 'Articulo', 'Nombre Artículo', 'Material', 'Desc. Artículo', 'Item'] if c in df.columns), None)
     if col_prod:
@@ -30,10 +124,9 @@ def cargar_y_limpiar_datos(uploaded_file):
         if c in df.columns:
             df[c] = df[c].fillna(f'Sin {c}')
             if df[c].dtype == 'object':
-                # Normaliza: quita espacios extra y pone formato Título para agrupar bien
                 df[c] = df[c].astype(str).str.strip().str.title()
     
-    # 3. Limpieza y parseo de fechas
+    # 5. Limpieza y parseo de fechas
     for col in df.columns:
         if df[col].dtype == 'object':
             try:
@@ -47,13 +140,9 @@ def cargar_y_limpiar_datos(uploaded_file):
     
     df_descartadas = pd.DataFrame()
     if cols_fecha:
-        # Priorizar una columna que realmente se llame 'Fecha'
         col_f = next((c for c in cols_fecha if 'fecha' in c.lower()), cols_fecha[0])
         
-        # Guardamos las filas que tienen NaT (Not a Time) en la fecha antes de borrarlas
         df_descartadas = df[df[col_f].isna()].copy()
-        
-        # Mantenemos solo las válidas
         df = df.dropna(subset=[col_f])
         
         df['Año'] = df[col_f].dt.year
@@ -64,25 +153,43 @@ def cargar_y_limpiar_datos(uploaded_file):
                      7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
         df['Mes_Nombre'] = df['Mes_Num'].map(meses_map)
 
-    # Ahora devolvemos también el DataFrame de las filas descartadas
-    return df, df_descartadas
+    return df, df_descartadas, int(cantidad_nc)
+
+
+def detectar_meses_incompletos(df: pd.DataFrame, umbral: float = 0.5) -> list:
+    """
+    Revisa si algún mes tiene muchas menos filas que el promedio de los demás
+    meses del mismo archivo. Esto casi siempre delata un export truncado por
+    el sistema de origen (SAP/BI), NO una caída real de ventas.
+    Devuelve una lista de strings con los meses sospechosos, para mostrar
+    como advertencia en el dashboard.
+    """
+    if 'Año' not in df.columns or 'Mes_Num' not in df.columns:
+        return []
+
+    conteo = df.groupby(['Año', 'Mes_Num']).size()
+    if len(conteo) < 2:
+        return []
+
+    promedio = conteo.median()
+    avisos = []
+    meses_map = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio',
+                 7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
+    for (anio, mes), cantidad in conteo.items():
+        if cantidad < promedio * umbral:
+            avisos.append(f"{meses_map.get(int(mes), mes)} {int(anio)} (solo {int(cantidad):,} filas vs. mediana de {int(promedio):,})")
+    return avisos
 
 
 def calcular_kpis(df: pd.DataFrame) -> dict:
-    """
-    Calcula los 4 indicadores clave. Ahora incluye lógica avanzada para 
-    el Ticket Promedio agrupando por número de documento si existe.
-    """
     venta = df['Total Línea'].sum() if 'Total Línea' in df.columns else 0
     kilos = df['Kilos'].sum() if 'Kilos' in df.columns else 0
     
-    # Mejora para Ticket Promedio Real (agrupado por folio/documento)
     col_doc = next((c for c in ['Folio', 'Documento', 'Nro Documento', 'Nº Doc', 'Factura', 'Boleta', 'Ticket'] if c in df.columns), None)
     if col_doc and len(df) > 0:
         pedidos_unicos = df[col_doc].nunique()
         ticket = (venta / pedidos_unicos) if pedidos_unicos > 0 else 0
     else:
-        # Fallback a promedio por línea si no hay identificador de documento
         ticket = df['Total Línea'].mean() if 'Total Línea' in df.columns else 0
         
     clientes = df['Cod Cliente'].nunique() if 'Cod Cliente' in df.columns else 0
@@ -90,14 +197,6 @@ def calcular_kpis(df: pd.DataFrame) -> dict:
 
 
 def generar_excel_bonito(hojas: dict) -> bytes:
-    """
-    Genera un archivo .xlsx en memoria con formato profesional:
-    encabezados en negrita con fondo oscuro, columnas de moneda/kilos/porcentaje
-    formateadas, ancho de columna automático y encabezado congelado.
-
-    hojas: dict {nombre_hoja: (dataframe, formatos)}
-        formatos: dict opcional {nombre_columna: 'moneda' | 'kilos' | 'porcentaje'}
-    """
     import io
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
