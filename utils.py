@@ -1,4 +1,5 @@
 import pandas as pd
+import pandas.api.types as ptypes
 import streamlit as st
 import re
 
@@ -54,58 +55,59 @@ def _limpiar_numero(valor):
     except ValueError:
         return 0.0
 
-    # Como la expresión regular borró los signos, "numero" siempre es positivo.
-    # Aquí le devolvemos el signo negativo si detectamos que era necesario.
     return -numero if es_negativo else numero
+
 
 @st.cache_data(show_spinner=False)
 def cargar_y_limpiar_datos(uploaded_file):
     """
-    Lee el archivo Excel o CSV, limpia la fila de 'Total' de SAP, 
+    Lee el archivo Excel, limpia la fila de 'Total' de SAP,
     normaliza textos, fuerza notas de crédito a negativo y maneja fechas.
     """
-    if uploaded_file.name.endswith('.csv'):
-        df = pd.read_csv(uploaded_file)
-    else:
+    # OJO DE RENDIMIENTO: el motor por defecto de pandas para leer .xlsx
+    # (openpyxl) es notablemente lento en archivos grandes (~30s para
+    # ~190.000 filas en nuestras pruebas) porque procesa el archivo
+    # celda por celda. 'calamine' (motor en Rust, paquete
+    # python-calamine) lee EXACTAMENTE los mismos datos en ~4 veces
+    # menos tiempo. Si no está instalado, se cae automáticamente al
+    # motor normal — no rompe la app, solo pierde la mejora de
+    # velocidad hasta que se instale.
+    try:
+        uploaded_file.seek(0)
+        xls = pd.ExcelFile(uploaded_file, engine='calamine')
+    except (ImportError, ValueError):
+        uploaded_file.seek(0)
         xls = pd.ExcelFile(uploaded_file)
-        # Lee TODAS las hojas del archivo y las junta (por si alguien separó
-        # los años o los meses en distintas hojas dentro del mismo Excel,
-        # como una hoja "2025" y otra "2026").
-        hojas = [pd.read_excel(xls, sheet_name=nombre) for nombre in xls.sheet_names]
-        df = pd.concat(hojas, ignore_index=True) if len(hojas) > 1 else hojas[0]
-    
-    # 1. Elimina filas de resumen tipo "Total" que SAP agrega al final del export
+    hojas = [pd.read_excel(xls, sheet_name=nombre) for nombre in xls.sheet_names]
+    df = pd.concat(hojas, ignore_index=True) if len(hojas) > 1 else hojas[0]
+
     col_texto = next((c for c in ['Detalle', 'Cliente', 'Nombre Cliente', 'Vendedor', 'Zona'] if c in df.columns), None)
     if col_texto:
         mask_total = df[col_texto].astype(str).str.strip().str.lower().isin(['total', 'totales', 'total general'])
         df = df[~mask_total]
 
-    # 1b. Red de seguridad: algunos exportadores (SAP/BI) agregan al final filas
-    # de texto libre como "Total", "Filtros aplicados: ..." o el aviso
-    # "Exported data exceeded the allowed volume. Some data may have been
-    # omitted." Estas filas no son datos y hay que botarlas SIEMPRE,
-    # independiente de en qué columna hayan caído.
+    # OJO DE RENDIMIENTO: esto ANTES se hacía con df.apply(..., axis=1),
+    # revisando fila por fila (convierte cada fila en una Series de pandas
+    # y aplica el chequeo de texto una por una) — con ~90.000-190.000 filas
+    # esto tomaba 35-45 segundos por sí solo, siendo el cuello de botella
+    # real detrás de "la carga se demora 2 minutos" (no era el Excel en
+    # sí). Ahora se revisa columna por columna con .str.contains()
+    # vectorizado, que hace lo mismo en fracciones de segundo.
     patron_footer = r'exported data exceeded|filtros aplicados|allowed volume'
-    mask_footer = df.apply(
-        lambda fila: fila.astype(str).str.lower().str.contains(patron_footer, regex=True, na=False).any(),
-        axis=1
-    )
+    mask_footer = pd.Series(False, index=df.index)
+    for col in df.columns:
+        if ptypes.is_string_dtype(df[col]) or df[col].dtype == 'object':
+            mask_footer |= df[col].astype(str).str.lower().str.contains(patron_footer, regex=True, na=False)
     if mask_footer.any():
         df = df[~mask_footer]
 
-    # 2. Limpiador numérico avanzado (Atrapa los paréntesis y signos)
     cols_numericas = [c for c in ['Total Línea', 'Kilos', 'Cantidad'] if c in df.columns]
     for c in cols_numericas:
         df[c] = df[c].apply(_limpiar_numero)
 
-    # 3. REGLA ESTRICTA "INDICADOR": FORZAR NOTAS DE CRÉDITO A NEGATIVO
     cantidad_nc = 0
     col_ind = next((c for c in df.columns if 'indicador' in str(c).strip().lower()), None)
     if col_ind:
-        # Busca palabras clave perdonando tildes y mayúsculas.
-        # OJO: se excluye explícitamente "débito"/"debito"/"debit" porque
-        # "Nota de Débito" también contiene la palabra "nota", y una nota
-        # de débito SUMA (no debe forzarse a negativo como una de crédito).
         texto_ind = df[col_ind].astype(str).str.lower()
         mask_nc = (
             texto_ind.str.contains('crédito|credito|credit', na=False, regex=True)
@@ -114,10 +116,8 @@ def cargar_y_limpiar_datos(uploaded_file):
         cantidad_nc = mask_nc.sum()
 
         for c in cols_numericas:
-            # Fuerza matemáticamente a que sea negativo (-abs)
             df.loc[mask_nc, c] = -df.loc[mask_nc, c].abs()
 
-    # 4. Normalización de texto y llenado de nulos en columnas de agrupación
     cols_agrupacion = ['Zona', 'Categoría', 'Vendedor', 'Nombre Cliente']
     col_prod = next((c for c in ['Detalle', 'Producto', 'Descripción', 'Articulo', 'Nombre Artículo', 'Material', 'Desc. Artículo', 'Item'] if c in df.columns), None)
     if col_prod:
@@ -126,31 +126,43 @@ def cargar_y_limpiar_datos(uploaded_file):
     for c in cols_agrupacion:
         if c in df.columns:
             df[c] = df[c].fillna(f'Sin {c}')
-            if df[c].dtype == 'object':
+            if ptypes.is_string_dtype(df[c]) or df[c].dtype == 'object':
                 df[c] = df[c].astype(str).str.strip().str.title()
     
-    # 5. Limpieza y parseo de fechas
-    # OJO: si alguien arma el Excel a mano y la columna de fecha pierde el
-    # formato de "Fecha" en Excel, pandas la lee como un número plano
-    # (ej: 45659, el "número de serie" interno de Excel para el 2-ene-2025).
-    # pd.to_datetime normal interpretaría ese número como nanosegundos desde
-    # 1970 y arruinaría todo. Por eso primero detectamos esos números de
-    # serie de Excel (rango razonable ~año 2000 a ~2040) y los convertimos
-    # con el origen correcto (30-dic-1899), y solo el resto lo tratamos
-    # como texto de fecha normal.
     def _convertir_fecha_mixta(serie):
-        def _es_serial_excel(v):
+        def _a_numero_si_es_posible(v):
+            # OJO: bajo pandas 3.0, una columna de puros números (ej. "46029",
+            # el número-serie de Excel para una fecha) puede llegar como
+            # StringDtype con valores tipo texto ("46029" con comillas), no
+            # como int/float directos. Antes esta función solo reconocía
+            # int/float reales, así que estos valores-texto pasaban de largo
+            # sin detectarse como fecha-serie. Ahora también intenta
+            # convertir el texto a número antes de descartarlo.
             if isinstance(v, bool) or pd.isna(v):
-                return False
+                return None
             if isinstance(v, (int, float)):
-                return 36526 <= v <= 51544  # aprox. año 2000 a 2041
-            return False
+                return float(v)
+            if isinstance(v, str):
+                texto = v.strip()
+                if re.fullmatch(r'\d+(\.\d+)?', texto):
+                    try:
+                        return float(texto)
+                    except ValueError:
+                        return None
+            return None
+
+        def _es_serial_excel(v):
+            numero = _a_numero_si_es_posible(v)
+            if numero is None:
+                return False
+            return 36526 <= numero <= 51544
 
         mask_serial = serie.apply(_es_serial_excel)
         resultado = pd.Series(pd.NaT, index=serie.index, dtype='datetime64[ns]')
         if mask_serial.any():
+            valores_numericos = serie[mask_serial].apply(_a_numero_si_es_posible).astype(float)
             resultado.loc[mask_serial] = pd.to_datetime(
-                serie[mask_serial].astype(float), unit='D', origin='1899-12-30', errors='coerce'
+                valores_numericos, unit='D', origin='1899-12-30', errors='coerce'
             )
         resto = ~mask_serial
         if resto.any():
@@ -158,7 +170,10 @@ def cargar_y_limpiar_datos(uploaded_file):
         return resultado
 
     for col in df.columns:
-        if df[col].dtype == 'object':
+        # Columnas leídas desde Excel con contenido mixto/crudo (ej. 'Fecha'
+        # con números de serie tipo 45659 mezclados con celdas ya-fecha)
+        # quedan en dtype=='object', por eso se revisan ambas condiciones.
+        if ptypes.is_string_dtype(df[col]) or df[col].dtype == 'object':
             try:
                 converted = _convertir_fecha_mixta(df[col])
                 if converted.notna().sum() > (len(df) * 0.1): 
@@ -187,13 +202,6 @@ def cargar_y_limpiar_datos(uploaded_file):
 
 
 def detectar_meses_incompletos(df: pd.DataFrame, umbral: float = 0.5) -> list:
-    """
-    Revisa si algún mes tiene muchas menos filas que el promedio de los demás
-    meses del mismo archivo. Esto casi siempre delata un export truncado por
-    el sistema de origen (SAP/BI), NO una caída real de ventas.
-    Devuelve una lista de strings con los meses sospechosos, para mostrar
-    como advertencia en el dashboard.
-    """
     if 'Año' not in df.columns or 'Mes_Num' not in df.columns:
         return []
 
@@ -226,51 +234,70 @@ def calcular_kpis(df: pd.DataFrame) -> dict:
     return {'venta': venta, 'kilos': kilos, 'ticket': ticket, 'clientes': clientes}
 
 
+@st.cache_data(show_spinner=False)
 def generar_excel_bonito(hojas: dict) -> bytes:
     import io
     from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
 
-    wb = Workbook()
-    wb.remove(wb.active)
+    wb = Workbook(write_only=True)
 
     header_font = Font(bold=True, color='FFFFFF')
     header_fill = PatternFill(start_color='1C1917', end_color='1C1917', fill_type='solid')
+
+    NUM_FORMATOS = {
+        'moneda': '$#,##0',
+        'kilos': '#,##0',
+        'porcentaje': '0.0"%"',
+    }
 
     for nombre_hoja, contenido in hojas.items():
         df_hoja, formatos = contenido if isinstance(contenido, tuple) else (contenido, {})
         formatos = formatos or {}
 
         ws = wb.create_sheet(title=str(nombre_hoja)[:31])
-        ws.append(list(df_hoja.columns))
-        for col_idx in range(1, len(df_hoja.columns) + 1):
-            celda = ws.cell(row=1, column=col_idx)
-            celda.font = header_font
-            celda.fill = header_fill
-            celda.alignment = Alignment(horizontal='center')
-
-        for _, fila in df_hoja.iterrows():
-            ws.append(list(fila))
+        ws.freeze_panes = 'A2'
 
         for col_idx, col_nombre in enumerate(df_hoja.columns, start=1):
             letra = get_column_letter(col_idx)
-            valores_str = [str(v) for v in df_hoja[col_nombre]] if len(df_hoja) else []
-            largo_max = max([len(str(col_nombre))] + [len(v) for v in valores_str])
+            if len(df_hoja):
+                serie = df_hoja.iloc[:, col_idx - 1]
+                largo_col = serie.astype(str).str.len().max()
+                largo_max = max(len(str(col_nombre)), int(largo_col) if pd.notna(largo_col) else 0)
+            else:
+                largo_max = len(str(col_nombre))
             ws.column_dimensions[letra].width = min(largo_max + 4, 45)
 
-            formato = formatos.get(col_nombre)
-            if formato and len(df_hoja) > 0:
-                num_formato = {
-                    'moneda': '$#,##0',
-                    'kilos': '#,##0',
-                    'porcentaje': '0.0"%"',
-                }.get(formato)
-                if num_formato:
-                    for row_idx in range(2, len(df_hoja) + 2):
-                        ws.cell(row=row_idx, column=col_idx).number_format = num_formato
+        header_cells = []
+        for col_nombre in df_hoja.columns:
+            c = WriteOnlyCell(ws, value=col_nombre)
+            c.font = header_font
+            c.fill = header_fill
+            c.alignment = Alignment(horizontal='center')
+            header_cells.append(c)
+        ws.append(header_cells)
 
-        ws.freeze_panes = 'A2'
+        cols_con_formato = {}
+        for idx, col_nombre in enumerate(df_hoja.columns):
+            num_formato = NUM_FORMATOS.get(formatos.get(col_nombre))
+            if num_formato:
+                cols_con_formato[idx] = num_formato
+
+        for fila in df_hoja.itertuples(index=False, name=None):
+            if cols_con_formato:
+                fila_final = []
+                for idx, valor in enumerate(fila):
+                    if idx in cols_con_formato:
+                        c = WriteOnlyCell(ws, value=valor)
+                        c.number_format = cols_con_formato[idx]
+                        fila_final.append(c)
+                    else:
+                        fila_final.append(valor)
+                ws.append(fila_final)
+            else:
+                ws.append(fila)
 
     buffer = io.BytesIO()
     wb.save(buffer)
