@@ -168,7 +168,7 @@ try:
         ])
 
         with tab1:
-            dashboard_general.render(df_a, df_b, df_dual, modo, label_a, label_b, color_map)
+            dashboard_general.render(df_a, df_b, df_dual, modo, label_a, label_b, color_map, df_filtrado)
 
         with tab2:
             analisis_productos.render(df_dual, modo, label_a, label_b, color_map, col_sort_tabla, col_prod)
