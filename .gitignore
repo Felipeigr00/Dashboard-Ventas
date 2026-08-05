@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+
+# Plan de ventas mensual: dato privado del negocio, se sube desde la app
+# y se guarda localmente — no debe versionarse en git.
+data/
