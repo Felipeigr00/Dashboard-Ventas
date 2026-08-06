@@ -117,10 +117,28 @@ def _seccion_plan_mensual(df: pd.DataFrame):
         return
 
     df_mes = df[(df['Año'] == fecha_ref.year) & (df['Mes_Num'] == fecha_ref.month)]
-    venta_mes = df_mes.groupby('Vendedor', as_index=False).agg(Venta=('Total Línea', 'sum'))
 
-    comparativo = pd.merge(plan, venta_mes, on='Vendedor', how='left')
+    # Ojo: antes esto cruzaba solo por 'Vendedor' con un LEFT join desde
+    # el plan. Eso rompía la "Venta Acumulada del Mes" de dos formas:
+    # (1) un vendedor con venta pero que no está en el plan (nuevo, o con
+    # el nombre escrito distinto) quedaba totalmente afuera de la suma;
+    # (2) un vendedor que aparece en más de una Zona en el plan tenía dos
+    # filas con el mismo nombre, y el merge le repetía (duplicaba) toda
+    # su venta del mes en cada una — inflando el total. Cruzar por
+    # ['Zona', 'Vendedor'] con un OUTER join evita ambos casos.
+    if 'Zona' in df_mes.columns and 'Zona' in plan.columns:
+        venta_mes = df_mes.groupby(['Zona', 'Vendedor'], as_index=False).agg(Venta=('Total Línea', 'sum'))
+        comparativo = pd.merge(plan, venta_mes, on=['Zona', 'Vendedor'], how='outer')
+    else:
+        venta_mes = df_mes.groupby('Vendedor', as_index=False).agg(Venta=('Total Línea', 'sum'))
+        plan_por_vendedor = plan.groupby('Vendedor', as_index=False)['Meta'].sum()
+        comparativo = pd.merge(plan_por_vendedor, venta_mes, on='Vendedor', how='outer')
+        comparativo['Zona'] = comparativo.get('Zona', '')
+
+    comparativo['Zona'] = comparativo['Zona'].fillna('Sin Zona')
+    comparativo['Vendedor'] = comparativo['Vendedor'].fillna('Sin Vendedor')
     comparativo['Venta'] = comparativo['Venta'].fillna(0)
+    comparativo['Meta'] = comparativo['Meta'].fillna(0)
     comparativo['% Cumplimiento'] = (comparativo['Venta'] / comparativo['Meta'] * 100).where(comparativo['Meta'] > 0, 0)
     comparativo = comparativo.sort_values('% Cumplimiento', ascending=False)
 
