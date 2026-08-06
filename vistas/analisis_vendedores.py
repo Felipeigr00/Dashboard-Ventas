@@ -107,12 +107,14 @@ def _resumen_por_vendedor(df_periodo: pd.DataFrame, sufijo: str):
 
 
 def _detalle_por_cliente(df_periodo: pd.DataFrame):
-    """Desglose fila a fila: Zona, Vendedor y Cliente, con venta ($) y
-    unidades (Kilos/Unidades), para que quien descargue el Excel pueda ver
-    exactamente qué se facturó a cada cliente sin tener que cruzar datos.
+    """Desglose por documento: Zona, Vendedor y Cliente, con la venta ($)
+    total de cada Folio SII, para que quien descargue el Excel pueda ver
+    qué se facturó a cada cliente sin tener que cruzar datos.
 
-    Se deja una fila por documento (no se agrupa) porque el Folio SII es
-    único por factura/boleta — agrupar por cliente perdería esa trazabilidad."""
+    Una factura/boleta con varios productos trae una fila por línea en el
+    Excel original, todas con el mismo Folio SII — se agrupan y se suman
+    para mostrar el total facturado por documento en vez de repetir el
+    folio con montos parciales por producto."""
     if 'Nombre Cliente' not in df_periodo.columns or 'Vendedor' not in df_periodo.columns:
         return None
 
@@ -130,5 +132,9 @@ def _detalle_por_cliente(df_periodo: pd.DataFrame):
 
     if 'Cliente' not in detalle.columns or 'Venta' not in detalle.columns:
         return None
+
+    if 'Folio SII' in detalle.columns:
+        cols_grupo = [c for c in ['Zona', 'Vendedor', 'Cliente', 'Rut Cliente', 'Folio SII'] if c in detalle.columns]
+        detalle = detalle.groupby(cols_grupo, as_index=False)['Venta'].sum()
 
     return detalle.sort_values(['Vendedor', 'Venta'], ascending=[True, False])
