@@ -138,8 +138,8 @@ def inyectar_css(modo: str = "claro"):
         .ledger-tape.compacta .marcas span:nth-child(even) {{ height: 6px; }}
 
         .sub-seccion {{
-            display: flex; align-items: center; gap: 9px; font-family: 'Lora', serif; font-size: 0.95rem;
-            font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 9px; margin: 22px 0 16px 0;
+            display: flex; align-items: center; gap: 9px; font-family: 'Lora', serif; font-size: 1.15rem;
+            font-weight: 700; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 9px; margin: 22px 0 16px 0;
         }}
         .sub-seccion::before {{ content: ""; width: 7px; height: 7px; flex-shrink: 0; background: var(--accent); border-radius: 50%; }}
 
@@ -171,9 +171,10 @@ def inyectar_css(modo: str = "claro"):
            role="combobox"). Los selectores viejos con data-baseweb nunca
            calzaban, así que estos elementos quedaban con el color nativo
            de Streamlit (fijo en claro) en vez del nuestro. */
-        [data-testid="stTabs"] [role="tab"] {{ height: 44px; font-size: 0.95rem; font-weight: 600; color: var(--text-muted) !important; border-radius: 6px 6px 0 0; }}
-        [data-testid="stTabs"] [role="tab"][aria-selected="true"] {{ color: var(--text) !important; border-bottom: 2px solid var(--accent) !important; }}
-        [data-testid="stTabs"] [role="tablist"] {{ gap: 6px; border-bottom: 1px solid var(--border); }}
+        [data-testid="stTabs"] [role="tab"] {{ height: 52px; font-size: 1.1rem; font-weight: 700; color: var(--text-muted) !important; border-radius: 6px 6px 0 0; padding: 0 18px; }}
+        [data-testid="stTabs"] [role="tab"][aria-selected="true"] {{ color: var(--text) !important; border-bottom: 4px solid var(--accent) !important; }}
+        [data-testid="stTabs"] [role="tablist"] {{ gap: 6px; border-bottom: 2px solid var(--accent); width: 100%; opacity: 1; }}
+        [data-testid="stTabs"] [role="tab"] p {{ font-size: 1.1rem !important; }}
 
         .stButton button, .stDownloadButton button {{ background-color: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-weight: 600; transition: border-color 0.15s ease, color 0.15s ease; }}
         .stButton button:hover, .stDownloadButton button:hover {{ border-color: var(--accent); color: var(--accent-strong); }}
