@@ -80,7 +80,7 @@ try:
     filtro_zona = "Todas"
 
     with st.container(border=True):
-        col_info, col_toggle, col_editar = st.columns([3, 2, 1.1])
+        col_info, col_toggle = st.columns([3, 2])
 
         with col_toggle:
             modo_ui = st.segmented_control(
@@ -90,45 +90,68 @@ try:
             )
         modo = "Comparativa (A vs B)" if modo_ui == "Comparar periodos" else "Vista Simple (1 Periodo)"
 
-        with col_editar:
-            with st.popover("✏️ Editar", width='stretch'):
-                if 'Zona' in df.columns:
-                    zonas_disponibles = sorted(df['Zona'].dropna().astype(str).unique().tolist())
-                    filtro_zona = st.selectbox("Filtrar por Zona", ["Todas"] + zonas_disponibles)
-                    if filtro_zona != "Todas":
-                        df_filtrado = df_filtrado[df_filtrado['Zona'].astype(str) == filtro_zona]
-                    st.divider()
+        st.divider()
 
-                if modo == "Comparativa (A vs B)":
-                    st.markdown("##### 🟠 Periodo A (Base)")
-                    anio_a = st.selectbox("Año Periodo A", anos_disponibles, index=0, key='anio_a')
-                    meses_a_nombres = st.multiselect("Mes(es) Periodo A", meses_disponibles_nombres, default=[meses_disponibles_nombres[0]], key='mes_a')
-                    mes_a_num = [k for k, v in MESES_MAP.items() if v in meses_a_nombres]
+        if 'Zona' in df.columns:
+            zonas_disponibles = sorted(df['Zona'].dropna().astype(str).unique().tolist())
+            filtro_zona = st.selectbox("Filtrar por Zona", ["Todas"] + zonas_disponibles)
+            if filtro_zona != "Todas":
+                df_filtrado = df_filtrado[df_filtrado['Zona'].astype(str) == filtro_zona]
 
-                    st.markdown("##### 🟢 Periodo B (Comparación)")
-                    anio_b = st.selectbox("Año Periodo B", anos_disponibles, index=len(anos_disponibles) - 1, key='anio_b')
-                    sincronizar_meses = st.checkbox("Usar los mismos meses que Periodo A", value=True, key='sync_meses')
-                    if sincronizar_meses:
-                        meses_b_nombres = meses_a_nombres
-                        st.caption(f"Meses B = {', '.join(meses_a_nombres) if meses_a_nombres else '(ninguno)'}")
-                    else:
-                        meses_b_nombres = st.multiselect("Mes(es) Periodo B", meses_disponibles_nombres, default=[meses_disponibles_nombres[-1]], key='mes_b')
-                    mes_b_num = [k for k, v in MESES_MAP.items() if v in meses_b_nombres]
+        if modo == "Comparativa (A vs B)":
+            st.markdown("##### 🟠 Periodo A (Base)")
+            st.caption("Año Periodo A")
+            anio_a = st.segmented_control(
+                "Año Periodo A", anos_disponibles, default=anos_disponibles[0],
+                key='anio_a', required=True, label_visibility="collapsed"
+            )
+            st.caption("Mes(es) Periodo A")
+            meses_a_nombres = st.segmented_control(
+                "Mes(es) Periodo A", meses_disponibles_nombres, default=[meses_disponibles_nombres[0]],
+                key='mes_a', selection_mode='multi', label_visibility="collapsed"
+            ) or []
+            mes_a_num = [k for k, v in MESES_MAP.items() if v in meses_a_nombres]
 
-                    if not meses_a_nombres or not meses_b_nombres:
-                        st.warning("Selecciona al menos un mes para el Periodo A y para el Periodo B.")
-                        st.stop()
-                else:
-                    st.markdown("##### 🔵 Periodo Único")
-                    anio_a = st.selectbox("Año", anos_disponibles, index=0, key='anio_unico')
-                    meses_a_nombres = st.multiselect("Mes(es)", meses_disponibles_nombres, default=[meses_disponibles_nombres[0]], key='mes_unico')
-                    mes_a_num = [k for k, v in MESES_MAP.items() if v in meses_a_nombres]
+            st.markdown("##### 🟢 Periodo B (Comparación)")
+            st.caption("Año Periodo B")
+            anio_b = st.segmented_control(
+                "Año Periodo B", anos_disponibles, default=anos_disponibles[-1],
+                key='anio_b', required=True, label_visibility="collapsed"
+            )
+            sincronizar_meses = st.checkbox("Usar los mismos meses que Periodo A", value=True, key='sync_meses')
+            if sincronizar_meses:
+                meses_b_nombres = meses_a_nombres
+                st.caption(f"Meses B = {', '.join(meses_a_nombres) if meses_a_nombres else '(ninguno)'}")
+            else:
+                st.caption("Mes(es) Periodo B")
+                meses_b_nombres = st.segmented_control(
+                    "Mes(es) Periodo B", meses_disponibles_nombres, default=[meses_disponibles_nombres[-1]],
+                    key='mes_b', selection_mode='multi', label_visibility="collapsed"
+                ) or []
+            mes_b_num = [k for k, v in MESES_MAP.items() if v in meses_b_nombres]
 
-                    anio_b, meses_b_nombres, mes_b_num = anio_a, [], []
+            if not meses_a_nombres or not meses_b_nombres:
+                st.warning("Selecciona al menos un mes para el Periodo A y para el Periodo B.")
+                st.stop()
+        else:
+            st.markdown("##### 🔵 Periodo Único")
+            st.caption("Año")
+            anio_a = st.segmented_control(
+                "Año", anos_disponibles, default=anos_disponibles[0],
+                key='anio_unico', required=True, label_visibility="collapsed"
+            )
+            st.caption("Mes(es)")
+            meses_a_nombres = st.segmented_control(
+                "Mes(es)", meses_disponibles_nombres, default=[meses_disponibles_nombres[0]],
+                key='mes_unico', selection_mode='multi', label_visibility="collapsed"
+            ) or []
+            mes_a_num = [k for k, v in MESES_MAP.items() if v in meses_a_nombres]
 
-                    if not meses_a_nombres:
-                        st.warning("Selecciona al menos un mes.")
-                        st.stop()
+            anio_b, meses_b_nombres, mes_b_num = anio_a, [], []
+
+            if not meses_a_nombres:
+                st.warning("Selecciona al menos un mes.")
+                st.stop()
 
         # --------------------------------------------------------------
         # ARMADO DE PERIODOS A / B (etiquetas usadas en la info y abajo)

@@ -229,11 +229,18 @@ def inyectar_css(modo: str = "claro"):
         .periodo-dot.a {{ background: var(--periodo-a); }}
         .periodo-dot.b {{ background: var(--periodo-b); }}
 
-        /* ---------- Toggle "Vista simple / Comparar periodos" (st.segmented_control) ---------- */
-        [data-testid="stSegmentedControl"] label {{ font-weight: 600 !important; }}
-        [data-testid="stSegmentedControl"] button {{
+        /* ---------- st.segmented_control (toggle Vista/Comparar, píldoras de Año/Mes) ----------
+           Ojo: el wrapper real tiene testid "stButtonGroup", no
+           "stSegmentedControl" (ese testid no existe en esta versión de
+           Streamlit) — por eso esto nunca calzaba antes. */
+        [data-testid="stButtonGroup"] label {{ font-weight: 600 !important; }}
+        [data-testid="stButtonGroup"] button {{
             background-color: var(--surface) !important; color: var(--text) !important;
             border-color: var(--border) !important;
+        }}
+        [data-testid="stButtonGroup"] button[aria-checked="true"] {{
+            background-color: var(--surface) !important; color: var(--accent-strong) !important;
+            border: 2px solid var(--accent) !important; font-weight: 700 !important;
         }}
 
         /* ---------- Botón "Editar" (st.popover) ---------- */
