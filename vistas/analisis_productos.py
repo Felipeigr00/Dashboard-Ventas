@@ -38,11 +38,13 @@ def render(df_dual, modo, label_a, label_b, color_map, col_sort_tabla, col_prod)
             num_productos_unicos = df_prod[col_prod].nunique()
             alto_dinamico = max(600, num_productos_unicos * 25)
 
-            fig_prod = px.bar(df_prod, x='Total Línea', y=col_prod, color='Periodo', barmode='group', template="plotly_dark",
+            fig_prod = px.bar(df_prod, x='Total Línea', y=col_prod, color='Periodo', barmode='group',
                               orientation='h', labels={'Total Línea': 'Venta ($ CLP)', col_prod: 'Producto'},
                               color_discrete_map=color_map)
-            fig_prod.update_layout(yaxis={'categoryorder': 'total ascending'}, xaxis_tickprefix="$", xaxis_tickformat=",.", height=alto_dinamico)
-            st.plotly_chart(fig_prod, width='stretch')
+            layout_prod = theme.plotly_layout_kwargs()
+            layout_prod['yaxis'] = {**layout_prod['yaxis'], 'categoryorder': 'total ascending'}
+            fig_prod.update_layout(**layout_prod, xaxis_tickprefix="$", xaxis_tickformat=",.", height=alto_dinamico)
+            st.plotly_chart(fig_prod, width='stretch', theme=None)
 
             tabla_prod_export = df_prod.pivot(index=col_prod, columns='Periodo', values='Total Línea').fillna(0)
             if col_sort_tabla in tabla_prod_export.columns:
@@ -84,12 +86,14 @@ def render(df_dual, modo, label_a, label_b, color_map, col_sort_tabla, col_prod)
             if not df_prod_cli_agg.empty:
                 fig_prod_cli = px.bar(
                     df_prod_cli_agg, x='Total Línea', y='Nombre Cliente', color='Periodo', barmode='group',
-                    orientation='h', template="plotly_dark",
+                    orientation='h',
                     labels={'Total Línea': 'Venta ($ CLP)', 'Nombre Cliente': 'Cliente'},
                     color_discrete_map=color_map
                 )
-                fig_prod_cli.update_layout(yaxis={'categoryorder': 'total ascending'}, xaxis_tickprefix="$", xaxis_tickformat=",.", height=550)
-                st.plotly_chart(fig_prod_cli, width='stretch')
+                layout_prod_cli = theme.plotly_layout_kwargs()
+                layout_prod_cli['yaxis'] = {**layout_prod_cli['yaxis'], 'categoryorder': 'total ascending'}
+                fig_prod_cli.update_layout(**layout_prod_cli, xaxis_tickprefix="$", xaxis_tickformat=",.", height=550)
+                st.plotly_chart(fig_prod_cli, width='stretch', theme=None)
 
                 if 'Cod Cliente' in df_prod_cli.columns:
                     base = df_prod_cli[df_prod_cli['Nombre Cliente'].isin(top_clientes_prod)].groupby(

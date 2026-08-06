@@ -15,6 +15,8 @@ Estructura del proyecto:
     datos_resumen.py
 """
 
+import html
+
 import pandas as pd
 import streamlit as st
 
@@ -29,8 +31,14 @@ MESES_MAP = {1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Ju
 # CONFIGURACIÓN DE PÁGINA Y ESTILOS
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="Venta por Zona F", layout="wide", page_icon="☕")
-theme.inyectar_css()
-theme.render_header()
+st.session_state.setdefault("modo_tema", "claro")
+# Ojo: render_header() dibuja el interruptor claro/oscuro y puede actualizar
+# st.session_state["modo_tema"] en este mismo rerun. inyectar_css() tiene
+# que llamarse DESPUÉS, con el valor ya actualizado — si no, la página se
+# queda un paso atrás del interruptor (los gráficos sí quedan al día
+# porque leen el session_state más abajo en el script).
+modo_tema = theme.render_header(st.session_state["modo_tema"])
+theme.inyectar_css(modo_tema)
 
 # --------------------------------------------------------------------------
 # MEMORIA DE FILTROS (para que las pestañas no se reinicien solas)
@@ -62,89 +70,114 @@ try:
         st.stop()
 
     # ----------------------------------------------------------------------
-    # PANEL DE FILTROS GLOBALES
+    # BARRA DE CONTROL: modo de vista, filtro de zona y periodos
     # ----------------------------------------------------------------------
-    with st.expander("⚙️ Configuración Global del Dashboard", expanded=True):
+    anos_disponibles = sorted(df['Año'].dropna().unique().tolist())
+    meses_disponibles_nums = sorted(df['Mes_Num'].dropna().unique().tolist())
+    meses_disponibles_nombres = [MESES_MAP[m] for m in meses_disponibles_nums]
 
-        st.markdown("#### 🧭 Modo de Vista")
-        modo = st.radio("Selecciona el modo:", ["Comparativa (A vs B)", "Vista Simple (1 Periodo)"], horizontal=True)
+    df_filtrado = df.copy()
+    filtro_zona = "Todas"
 
-        st.divider()
+    with st.container(border=True):
+        col_info, col_toggle, col_editar = st.columns([3, 2, 1.1])
 
-        st.markdown("#### 🗺️ Filtro Operativo Opcional")
-        df_filtrado = df.copy()
-        if 'Zona' in df.columns:
-            zonas_disponibles = sorted(df['Zona'].dropna().astype(str).unique().tolist())
-            filtro_zona = st.selectbox("Filtrar por Zona", ["Todas"] + zonas_disponibles)
-            if filtro_zona != "Todas":
-                df_filtrado = df_filtrado[df_filtrado['Zona'].astype(str) == filtro_zona]
+        with col_toggle:
+            modo_ui = st.segmented_control(
+                "Vista", ["Vista simple", "Comparar periodos"],
+                default="Vista simple", required=True, key="modo_vista_ui",
+                label_visibility="collapsed", width='stretch'
+            )
+        modo = "Comparativa (A vs B)" if modo_ui == "Comparar periodos" else "Vista Simple (1 Periodo)"
 
-        st.divider()
+        with col_editar:
+            with st.popover("✏️ Editar", width='stretch'):
+                if 'Zona' in df.columns:
+                    zonas_disponibles = sorted(df['Zona'].dropna().astype(str).unique().tolist())
+                    filtro_zona = st.selectbox("Filtrar por Zona", ["Todas"] + zonas_disponibles)
+                    if filtro_zona != "Todas":
+                        df_filtrado = df_filtrado[df_filtrado['Zona'].astype(str) == filtro_zona]
+                    st.divider()
 
-        st.markdown("#### ⚖️ Configuración de Periodos")
-        anos_disponibles = sorted(df['Año'].dropna().unique().tolist())
-        meses_disponibles_nums = sorted(df['Mes_Num'].dropna().unique().tolist())
-        meses_disponibles_nombres = [MESES_MAP[m] for m in meses_disponibles_nums]
+                if modo == "Comparativa (A vs B)":
+                    st.markdown("##### 🟠 Periodo A (Base)")
+                    anio_a = st.selectbox("Año Periodo A", anos_disponibles, index=0, key='anio_a')
+                    meses_a_nombres = st.multiselect("Mes(es) Periodo A", meses_disponibles_nombres, default=[meses_disponibles_nombres[0]], key='mes_a')
+                    mes_a_num = [k for k, v in MESES_MAP.items() if v in meses_a_nombres]
+
+                    st.markdown("##### 🟢 Periodo B (Comparación)")
+                    anio_b = st.selectbox("Año Periodo B", anos_disponibles, index=len(anos_disponibles) - 1, key='anio_b')
+                    sincronizar_meses = st.checkbox("Usar los mismos meses que Periodo A", value=True, key='sync_meses')
+                    if sincronizar_meses:
+                        meses_b_nombres = meses_a_nombres
+                        st.caption(f"Meses B = {', '.join(meses_a_nombres) if meses_a_nombres else '(ninguno)'}")
+                    else:
+                        meses_b_nombres = st.multiselect("Mes(es) Periodo B", meses_disponibles_nombres, default=[meses_disponibles_nombres[-1]], key='mes_b')
+                    mes_b_num = [k for k, v in MESES_MAP.items() if v in meses_b_nombres]
+
+                    if not meses_a_nombres or not meses_b_nombres:
+                        st.warning("Selecciona al menos un mes para el Periodo A y para el Periodo B.")
+                        st.stop()
+                else:
+                    st.markdown("##### 🔵 Periodo Único")
+                    anio_a = st.selectbox("Año", anos_disponibles, index=0, key='anio_unico')
+                    meses_a_nombres = st.multiselect("Mes(es)", meses_disponibles_nombres, default=[meses_disponibles_nombres[0]], key='mes_unico')
+                    mes_a_num = [k for k, v in MESES_MAP.items() if v in meses_a_nombres]
+
+                    anio_b, meses_b_nombres, mes_b_num = anio_a, [], []
+
+                    if not meses_a_nombres:
+                        st.warning("Selecciona al menos un mes.")
+                        st.stop()
+
+        # --------------------------------------------------------------
+        # ARMADO DE PERIODOS A / B (etiquetas usadas en la info y abajo)
+        # --------------------------------------------------------------
+        meses_a_ordenados = [MESES_MAP[n] for n in sorted(mes_a_num)]
+        label_a = f"{', '.join(meses_a_ordenados)} {anio_a}"
 
         if modo == "Comparativa (A vs B)":
-            col_periodo_a, col_periodo_b = st.columns(2)
-
-            with col_periodo_a:
-                st.markdown("##### 🟦 Periodo A (Base)")
-                anio_a = st.selectbox("Año Periodo A", anos_disponibles, index=0, key='anio_a')
-                meses_a_nombres = st.multiselect("Mes(es) Periodo A", meses_disponibles_nombres, default=[meses_disponibles_nombres[0]], key='mes_a')
-                mes_a_num = [k for k, v in MESES_MAP.items() if v in meses_a_nombres]
-
-            with col_periodo_b:
-                st.markdown("##### 🟧 Periodo B (Comparación)")
-                anio_b = st.selectbox("Año Periodo B", anos_disponibles, index=len(anos_disponibles) - 1, key='anio_b')
-                sincronizar_meses = st.checkbox("Usar los mismos meses que Periodo A", value=True, key='sync_meses')
-                if sincronizar_meses:
-                    meses_b_nombres = meses_a_nombres
-                    st.caption(f"Meses B = {', '.join(meses_a_nombres) if meses_a_nombres else '(ninguno)'}")
-                else:
-                    meses_b_nombres = st.multiselect("Mes(es) Periodo B", meses_disponibles_nombres, default=[meses_disponibles_nombres[-1]], key='mes_b')
-                mes_b_num = [k for k, v in MESES_MAP.items() if v in meses_b_nombres]
-
-            if not meses_a_nombres or not meses_b_nombres:
-                st.warning("Selecciona al menos un mes para el Periodo A y para el Periodo B.")
-                st.stop()
+            meses_b_ordenados = [MESES_MAP[n] for n in sorted(mes_b_num)]
+            label_b = f"{', '.join(meses_b_ordenados)} {anio_b}"
+            if label_a == label_b:
+                # Mismo año/meses en A y B (típico con un solo año de datos):
+                # sin esto, las tablas que cruzan A y B (pd.merge con columnas
+                # 'Venta {label}' repetidas) chocan de nombre y rompen la app.
+                label_a += " (A)"
+                label_b += " (B)"
         else:
-            st.markdown("##### 🟦 Periodo Único")
-            anio_a = st.selectbox("Año", anos_disponibles, index=0, key='anio_unico')
-            meses_a_nombres = st.multiselect("Mes(es)", meses_disponibles_nombres, default=[meses_disponibles_nombres[0]], key='mes_unico')
-            mes_a_num = [k for k, v in MESES_MAP.items() if v in meses_a_nombres]
+            label_b = ""
 
-            anio_b, meses_b_nombres, mes_b_num = anio_a, [], []
-
-            if not meses_a_nombres:
-                st.warning("Selecciona al menos un mes.")
-                st.stop()
+        with col_info:
+            n_archivos = len(uploaded_files)
+            sufijo_archivos = "archivo" if n_archivos == 1 else "archivos"
+            if modo == "Comparativa (A vs B)":
+                periodo_html = (
+                    f'<span class="periodo-dot a"></span>{html.escape(label_a)}'
+                    f'&nbsp;&nbsp;vs&nbsp;&nbsp;'
+                    f'<span class="periodo-dot b"></span>{html.escape(label_b)}'
+                )
+            else:
+                periodo_html = f'Periodo <b>{html.escape(label_a)}</b>'
+            st.markdown(
+                f'<div class="control-bar-info">{periodo_html}'
+                f' &nbsp;·&nbsp; Zona <b>{html.escape(filtro_zona)}</b>'
+                f' &nbsp;·&nbsp; {n_archivos} {sufijo_archivos} cargados</div>',
+                unsafe_allow_html=True
+            )
 
     # ----------------------------------------------------------------------
-    # ARMADO DE PERIODOS A / B
+    # FILTRADO DE DATOS SEGÚN PERIODOS SELECCIONADOS
     # ----------------------------------------------------------------------
-    meses_a_ordenados = [MESES_MAP[n] for n in sorted(mes_a_num)]
-    label_a = f"{', '.join(meses_a_ordenados)} {anio_a}"
-
     df_a = df_filtrado[(df_filtrado['Año'] == anio_a) & (df_filtrado['Mes_Num'].isin(mes_a_num))].copy()
 
     if modo == "Comparativa (A vs B)":
         df_b = df_filtrado[(df_filtrado['Año'] == anio_b) & (df_filtrado['Mes_Num'].isin(mes_b_num))].copy()
-        meses_b_ordenados = [MESES_MAP[n] for n in sorted(mes_b_num)]
-        label_b = f"{', '.join(meses_b_ordenados)} {anio_b}"
-
-        theme.periodo_banner(f"Periodo Analizado: [{label_a}]  vs  [{label_b}]")
-
         df_a['Periodo'] = label_a
         df_b['Periodo'] = label_b
         df_dual = pd.concat([df_a, df_b])
     else:
         df_b = pd.DataFrame()
-        label_b = ""
-
-        theme.periodo_banner(f"Periodo Analizado: [{label_a}]")
-
         df_a['Periodo'] = label_a
         df_dual = df_a.copy()
 

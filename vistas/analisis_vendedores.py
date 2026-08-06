@@ -85,13 +85,13 @@ def _resumen_por_vendedor(df_periodo: pd.DataFrame, sufijo: str):
     with col_grafico:
         orden = resumen.sort_values('Venta', ascending=True)['Vendedor'].tolist()
         fig = px.bar(
-            resumen, y='Vendedor', x='Venta', orientation='h', template="plotly_dark",
+            resumen, y='Vendedor', x='Venta', orientation='h',
             category_orders={'Vendedor': orden},
             labels={'Venta': 'Venta ($ CLP)'},
             color_discrete_sequence=[theme.COLOR_ACCENT],
         )
-        fig.update_layout(height=380, xaxis_tickprefix="$", xaxis_tickformat=",.", margin=dict(l=0, r=10, t=10, b=0))
-        st.plotly_chart(fig, width='stretch', key=f"chart_vend_{sufijo}")
+        fig.update_layout(**theme.plotly_layout_kwargs(), height=380, xaxis_tickprefix="$", xaxis_tickformat=",.", margin=dict(l=0, r=10, t=10, b=0))
+        st.plotly_chart(fig, width='stretch', key=f"chart_vend_{sufijo}", theme=None)
 
     hojas = {'Resumen por Vendedor': (resumen, {'Venta': 'moneda', 'Kilos': 'kilos'})}
 

@@ -1,0 +1,12 @@
+[theme]
+# Tema fijo (no "auto") para que los componentes nativos de Streamlit
+# (tablas st.dataframe, popover, segmented control, file uploader) no
+# sigan el modo claro/oscuro del sistema operativo del usuario -- eso es
+# lo que hacía que se vieran negros aunque la app estuviera en "modo
+# claro". Coincide con la paleta clara de theme.py (TOKENS["claro"]).
+base = "light"
+primaryColor = "#3D6B4E"
+backgroundColor = "#F4F0E6"
+secondaryBackgroundColor = "#FDFCFA"
+textColor = "#2B2620"
+font = "sans serif"

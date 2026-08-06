@@ -1,32 +1,24 @@
 """
 theme.py
 --------
-Sistema de diseño de la Consola Ejecutiva. Centraliza la paleta de colores,
-tipografías y componentes visuales reutilizables para que el resto de la app
-(app.py y los módulos de vistas/) no repitan HTML/CSS suelto.
+Sistema de diseño de la Consola Ejecutiva — "Cauce Comercial", con soporte
+de modo claro / oscuro conmutable desde la propia app.
 
-Paleta — "Espresso Ledger":
-  Fondo casi negro con base cálida (espresso), acentos en caramelo tostado
-  (no ámbar brillante) y verdes/terracotas apagados para variaciones
-  positivas/negativas. Números en tipografía monoespaciada tipo "libro
-  contable" para transmitir precisión financiera.
+Uso en app.py:
 
-Tipografías:
-  - Fraunces (serif editorial): SOLO para el título principal y como marca
-    de las secciones (uso restringido, es el "acento" tipográfico).
-  - Inter: texto de interfaz, labels, botones, tablas.
-  - IBM Plex Mono: cifras grandes en las tarjetas KPI (venta, kilos, etc.)
+    import theme
+    st.session_state.setdefault("modo_tema", "claro")
+    theme.inyectar_css(st.session_state["modo_tema"])
+    modo = theme.render_header(st.session_state["modo_tema"])  # dibuja título + interruptor y lo lee
 
-Firma visual — "cinta de libro mayor":
-  Una regla horizontal con marcas verticales cortas/largas alternadas,
-  como la columna de un libro contable. Vive justo bajo el header y
-  reaparece (más discreta) como separador entre bloques grandes.
+El resto de funciones (ledger_tape, section_title, periodo_banner, kpi_row,
+signo_delta, render_footer, plotly_layout_kwargs) no cambian de firma — no
+hay que tocar vistas/.
 
-v2: agrega kpi_row()/kpi_card() — tarjetas de indicador en HTML propio en
-vez de st.metric(), para poder usar los colores de marca (verde salvia /
-terracota) en las variaciones en vez del verde/rojo genérico de Streamlit.
-Los usos existentes de st.metric() se pueden dejar tal cual: nada de esto
-rompe compatibilidad, es una opción adicional para adoptar donde convenga.
+Compatibilidad: las vistas que usan constantes de color directas
+(theme.COLOR_ACCENT, theme.COLOR_POSITIVE, theme.COLOR_PERIODO_A/B, etc.)
+siguen funcionando: se resuelven dinámicamente contra el modo activo
+guardado en st.session_state.
 """
 
 import html as _html
@@ -34,273 +26,289 @@ import html as _html
 import streamlit as st
 
 # --------------------------------------------------------------------------
-# TOKENS DE DISEÑO
+# TOKENS DE DISEÑO — modo claro y modo oscuro
 # --------------------------------------------------------------------------
-COLOR_BG = "#0B0A08"
-COLOR_SURFACE = "#161310"
-COLOR_SURFACE_RAISED = "#1D1812"
-COLOR_BORDER = "#2C2419"
-COLOR_LEDGER_LINE = "#6B5637"    # marcas de la cinta de libro mayor
-COLOR_TEXT = "#F1EAD9"
-COLOR_TEXT_MUTED = "#9A8D77"
-COLOR_ACCENT = "#B9793B"        # caramelo tostado — color de marca
-COLOR_ACCENT_STRONG = "#D89552"  # hover / énfasis
-COLOR_POSITIVE = "#7C9A78"      # verde salvia apagado
-COLOR_NEGATIVE = "#B25C46"      # terracota apagado
-COLOR_FOCUS = "#E8B54D"         # foco de teclado (accesibilidad)
+TOKENS = {
+    "claro": {
+        "bg": "#F4F0E6", "surface": "#FDFCFA", "surface_raised": "#F8F4EC",
+        "border": "#DED6C6", "ledger_line": "#A99B7E",
+        "text": "#2B2620", "text_muted": "#7A7060",
+        "accent": "#3D6B4E", "accent_strong": "#4C8562",
+        "positive": "#3F7A54", "negative": "#B85A3E", "focus": "#D89A46",
+        "periodo_a": "#C97B4A", "periodo_b": "#4C8562",
+    },
+    "oscuro": {
+        "bg": "#1C1912", "surface": "#242019", "surface_raised": "#2B261D",
+        "border": "#3A3325", "ledger_line": "#5C5138",
+        "text": "#EDE8DB", "text_muted": "#A69C86",
+        "accent": "#5FA47A", "accent_strong": "#74BA8F",
+        "positive": "#6CB58C", "negative": "#D98A5E", "focus": "#E0AE5A",
+        "periodo_a": "#D98A5E", "periodo_b": "#74BA8F",
+    },
+}
 
-# Colores fijos para Periodo A / Periodo B en los gráficos (se mantienen
-# estables sin importar qué filtros se apliquen)
-COLOR_PERIODO_A = "#4F8FBF"   # azul apagado
-COLOR_PERIODO_B = COLOR_ACCENT  # caramelo — coherente con la marca
+# Mapa de constantes de color "planas" (compatibilidad con vistas/ existentes)
+# hacia la clave correspondiente en TOKENS.
+_COLOR_ATTR_MAP = {
+    "COLOR_BG": "bg", "COLOR_SURFACE": "surface", "COLOR_SURFACE_RAISED": "surface_raised",
+    "COLOR_BORDER": "border", "COLOR_LEDGER_LINE": "ledger_line", "COLOR_TEXT": "text",
+    "COLOR_TEXT_MUTED": "text_muted", "COLOR_ACCENT": "accent", "COLOR_ACCENT_STRONG": "accent_strong",
+    "COLOR_POSITIVE": "positive", "COLOR_NEGATIVE": "negative", "COLOR_FOCUS": "focus",
+    "COLOR_PERIODO_A": "periodo_a", "COLOR_PERIODO_B": "periodo_b",
+}
 
 
-def inyectar_css():
-    """Inyecta la hoja de estilos completa de la app. Llamar una sola vez,
-    justo después de st.set_page_config()."""
+def _modo_actual() -> str:
+    return st.session_state.get("modo_tema", "claro")
+
+
+def __getattr__(name):
+    # PEP 562: permite theme.COLOR_ACCENT, theme.COLOR_PERIODO_A, etc.,
+    # resolviéndolos contra el modo (claro/oscuro) activo en la sesión.
+    if name in _COLOR_ATTR_MAP:
+        modo = _modo_actual()
+        return TOKENS.get(modo, TOKENS["claro"])[_COLOR_ATTR_MAP[name]]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def plotly_layout_kwargs() -> dict:
+    """Kwargs de layout para pasarle a fig.update_layout(**...) en cualquier
+    gráfico Plotly de la app, para que respete el modo claro/oscuro activo
+    en vez de quedar fijo en un template. Solo toca colores/tipografía, no
+    la estructura de los gráficos."""
+    t = TOKENS.get(_modo_actual(), TOKENS["claro"])
+    # automargin=True: sin template (antes era "plotly_dark", que lo trae
+    # incluido por defecto), Plotly no reserva espacio para las etiquetas
+    # de los ejes si el gráfico pide un margen chico (varios gráficos usan
+    # margin=dict(l=0, ...)) — sin esto, las etiquetas quedan cortadas y
+    # no se ven (ej. nombres de vendedor, % de cumplimiento).
+    eje = dict(gridcolor=t["border"], linecolor=t["border"], zerolinecolor=t["border"], automargin=True)
+    return dict(
+        paper_bgcolor=t["surface"],
+        plot_bgcolor=t["surface"],
+        font=dict(family="Inter, sans-serif", color=t["text"]),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=t["text"])),
+        xaxis=eje,
+        yaxis=eje,
+    )
+
+
+def inyectar_css(modo: str = "claro"):
+    """Inyecta la hoja de estilos completa de la app para el modo dado.
+    Llamar una sola vez, justo después de st.set_page_config()."""
+    t = TOKENS.get(modo, TOKENS["claro"])
     st.markdown(f"""
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=Inter:wght@400;500;600;700&display=swap');
 
         :root {{
-            --bg: {COLOR_BG};
-            --surface: {COLOR_SURFACE};
-            --surface-raised: {COLOR_SURFACE_RAISED};
-            --border: {COLOR_BORDER};
-            --ledger-line: {COLOR_LEDGER_LINE};
-            --text: {COLOR_TEXT};
-            --text-muted: {COLOR_TEXT_MUTED};
-            --accent: {COLOR_ACCENT};
-            --accent-strong: {COLOR_ACCENT_STRONG};
-            --positive: {COLOR_POSITIVE};
-            --negative: {COLOR_NEGATIVE};
-            --focus: {COLOR_FOCUS};
+            --bg: {t['bg']}; --surface: {t['surface']}; --surface-raised: {t['surface_raised']};
+            --border: {t['border']}; --ledger-line: {t['ledger_line']};
+            --text: {t['text']}; --text-muted: {t['text_muted']};
+            --accent: {t['accent']}; --accent-strong: {t['accent_strong']};
+            --positive: {t['positive']}; --negative: {t['negative']}; --focus: {t['focus']};
+            --periodo-a: {t['periodo_a']}; --periodo-b: {t['periodo_b']};
         }}
 
-        /* ---------- Base ---------- */
-        html, body, .stApp {{
-            background-color: var(--bg);
-            color: var(--text);
-            font-family: 'Inter', -apple-system, sans-serif;
-        }}
+        html, body, .stApp {{ background-color: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, sans-serif; }}
         .stApp * {{ letter-spacing: 0.001em; }}
-
-        h1, h2, h3 {{ font-family: 'Fraunces', Georgia, serif; letter-spacing: -0.01em; }}
+        h1, h2, h3 {{ font-family: 'Lora', Georgia, serif; letter-spacing: -0.005em; }}
         h1 {{ font-weight: 600 !important; }}
 
-        /* ---------- Encabezado de marca ---------- */
         .app-header {{ margin-bottom: 4px; }}
-        .app-header h1 {{
-            font-size: 2.1rem; margin-bottom: 2px; color: var(--text);
-            display: flex; align-items: center; gap: 12px;
-        }}
+        .app-header h1 {{ font-size: 2.05rem; margin-bottom: 2px; color: var(--text); display: flex; align-items: center; gap: 12px; }}
         .app-header .marca-icono {{
-            display: inline-flex; align-items: center; justify-content: center;
-            width: 40px; height: 40px; border-radius: 10px;
-            background: var(--surface-raised); border: 1px solid var(--border);
-            font-size: 1.3rem;
+            display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px;
+            border-radius: 50%; background: var(--surface); border: 2px solid var(--accent);
         }}
+        .app-header .marca-icono::before {{ content: ""; width: 14px; height: 2px; background: var(--accent); }}
         .app-subtitulo {{
-            font-family: 'Inter', sans-serif; font-size: 0.78rem; font-weight: 600;
-            text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-muted);
-            margin: 0 0 16px 52px;
+            font-family: 'Inter', sans-serif; font-size: 0.78rem; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.14em; color: var(--text-muted); margin: 0 0 16px 52px;
         }}
 
-        /* ---------- Firma visual: cinta de libro mayor ---------- */
-        .ledger-tape {{
-            position: relative; height: 16px; margin: 0 0 26px 0;
-        }}
-        .ledger-tape::before {{
-            content: ""; position: absolute; left: 0; right: 0; top: 7px;
-            height: 1px; background: var(--border);
-        }}
-        .ledger-tape .marcas {{
-            position: absolute; inset: 0; display: flex; justify-content: space-between;
-        }}
-        .ledger-tape .marcas span {{
-            width: 1px; background: var(--ledger-line);
-        }}
+        .ledger-tape {{ position: relative; height: 16px; margin: 0 0 26px 0; }}
+        .ledger-tape::before {{ content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 1px; background: var(--border); }}
+        .ledger-tape .marcas {{ position: absolute; inset: 0; display: flex; justify-content: space-between; }}
+        .ledger-tape .marcas span {{ width: 1px; background: var(--ledger-line); }}
         .ledger-tape .marcas span:nth-child(odd) {{ height: 14px; }}
         .ledger-tape .marcas span:nth-child(even) {{ height: 9px; align-self: flex-start; }}
         .ledger-tape.compacta {{ height: 10px; margin: 18px 0; opacity: 0.6; }}
         .ledger-tape.compacta .marcas span:nth-child(odd) {{ height: 10px; }}
         .ledger-tape.compacta .marcas span:nth-child(even) {{ height: 6px; }}
 
-        /* ---------- Título de sección ---------- */
         .sub-seccion {{
-            display: flex; align-items: center; gap: 9px;
-            font-family: 'Inter', sans-serif; font-size: 0.82rem; font-weight: 700;
-            text-transform: uppercase; letter-spacing: 0.09em; color: var(--text);
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 9px; margin: 22px 0 16px 0;
+            display: flex; align-items: center; gap: 9px; font-family: 'Lora', serif; font-size: 0.95rem;
+            font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 9px; margin: 22px 0 16px 0;
         }}
-        .sub-seccion::before {{
-            content: ""; width: 7px; height: 7px; flex-shrink: 0;
-            background: var(--accent); border-radius: 1.5px;
-        }}
+        .sub-seccion::before {{ content: ""; width: 7px; height: 7px; flex-shrink: 0; background: var(--accent); border-radius: 50%; }}
 
-        /* ---------- Banner de periodo ---------- */
         .periodo-header {{
-            font-family: 'Inter', sans-serif; font-size: 0.95rem; font-weight: 600;
-            color: var(--text); background: var(--surface);
-            padding: 12px 16px; border-radius: 6px; margin-bottom: 22px;
+            font-family: 'Inter', sans-serif; font-size: 0.95rem; font-weight: 600; color: var(--text);
+            background: var(--surface); padding: 12px 16px; border-radius: 6px; margin-bottom: 22px;
             border: 1px solid var(--border); border-left: 3px solid var(--accent);
         }}
 
-        /* ---------- Tarjetas KPI (st.metric nativo, se deja por compatibilidad) ---------- */
-        [data-testid="stMetric"] {{
-            background: var(--surface);
-            padding: 16px 18px; border-radius: 8px;
-            border: 1px solid var(--border);
-            border-left: 3px solid var(--accent);
-        }}
-        [data-testid="stMetricLabel"] {{
-            font-family: 'Inter', sans-serif !important; font-size: 0.72rem !important;
-            font-weight: 600 !important; text-transform: uppercase; letter-spacing: 0.08em;
-            color: var(--text-muted) !important;
-        }}
-        [data-testid="stMetricValue"] {{
-            font-family: 'IBM Plex Mono', monospace !important; font-weight: 600 !important;
-            color: var(--text) !important; font-size: 1.55rem !important;
-        }}
-        [data-testid="stMetricDelta"] {{ font-family: 'IBM Plex Mono', monospace !important; font-size: 0.82rem !important; }}
+        [data-testid="stMetric"] {{ background: var(--surface); padding: 16px 18px; border-radius: 10px; border: 1px solid var(--border); border-left: 3px solid var(--accent); }}
+        [data-testid="stMetricLabel"] {{ font-family: 'Inter', sans-serif !important; font-size: 0.72rem !important; font-weight: 600 !important; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted) !important; }}
+        [data-testid="stMetricValue"] {{ font-family: 'Lora', serif !important; font-weight: 600 !important; color: var(--text) !important; font-size: 1.55rem !important; }}
+        [data-testid="stMetricDelta"] {{ font-family: 'Inter', sans-serif !important; font-size: 0.82rem !important; }}
 
-        /* ---------- Tarjetas KPI propias (kpi_card / kpi_row) ---------- */
-        .kpi-grid {{
-            display: grid; grid-template-columns: repeat(var(--kpi-cols, 4), 1fr);
-            gap: 12px; margin-bottom: 4px;
-        }}
-        .kpi-card {{
-            background: var(--surface); border: 1px solid var(--border);
-            border-left: 3px solid var(--accent); border-radius: 8px;
-            padding: 14px 16px;
-        }}
-        .kpi-card .kpi-label {{
-            font-family: 'Inter', sans-serif; font-size: 0.68rem; font-weight: 600;
-            text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted);
-            margin-bottom: 6px;
-        }}
-        .kpi-card .kpi-valor {{
-            font-family: 'IBM Plex Mono', monospace; font-weight: 600;
-            color: var(--text); font-size: 1.5rem; line-height: 1.2;
-        }}
-        .kpi-card .kpi-delta {{
-            font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem;
-            margin-top: 5px; font-weight: 600;
-        }}
+        .kpi-grid {{ display: grid; grid-template-columns: repeat(var(--kpi-cols, 4), 1fr); gap: 12px; margin-bottom: 4px; }}
+        .kpi-card {{ background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 14px 16px; }}
+        .kpi-card .kpi-label {{ font-family: 'Inter', sans-serif; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 6px; }}
+        .kpi-card .kpi-valor {{ font-family: 'Lora', serif; font-weight: 600; color: var(--text); font-size: 1.5rem; line-height: 1.2; }}
+        .kpi-card .kpi-delta {{ font-family: 'Inter', sans-serif; font-size: 0.78rem; margin-top: 5px; font-weight: 600; }}
         .kpi-card .kpi-delta.pos {{ color: var(--positive); }}
         .kpi-card .kpi-delta.neg {{ color: var(--negative); }}
         .kpi-card .kpi-delta.neutro {{ color: var(--text-muted); }}
 
-        /* ---------- Expanders ---------- */
-        [data-testid="stExpander"] {{
-            background-color: var(--surface); border: 1px solid var(--border);
-            border-radius: 8px;
-        }}
-        .streamlit-expanderHeader {{
-            background-color: var(--surface) !important; border-radius: 8px;
-            font-weight: 600 !important;
-        }}
+        [data-testid="stExpander"] {{ background-color: var(--surface); border: 1px solid var(--border); border-radius: 10px; }}
+        .streamlit-expanderHeader {{ background-color: var(--surface) !important; border-radius: 10px; font-weight: 600 !important; }}
 
-        /* ---------- Tabs ---------- */
-        .stTabs [data-baseweb="tab-list"] {{ gap: 6px; border-bottom: 1px solid var(--border); }}
-        .stTabs [data-baseweb="tab"] {{
-            height: 44px; font-size: 0.95rem; font-weight: 600; color: var(--text-muted);
-            border-radius: 6px 6px 0 0;
-        }}
-        .stTabs [aria-selected="true"] {{
-            color: var(--text) !important;
-            border-bottom: 2px solid var(--accent) !important;
-        }}
+        /* Streamlit 1.60 dejó de usar [data-baseweb="tab"/"select"] — ahora
+           usa componentes react-aria (stTab, stSelectbox con role="tab" /
+           role="combobox"). Los selectores viejos con data-baseweb nunca
+           calzaban, así que estos elementos quedaban con el color nativo
+           de Streamlit (fijo en claro) en vez del nuestro. */
+        [data-testid="stTabs"] [role="tab"] {{ height: 44px; font-size: 0.95rem; font-weight: 600; color: var(--text-muted) !important; border-radius: 6px 6px 0 0; }}
+        [data-testid="stTabs"] [role="tab"][aria-selected="true"] {{ color: var(--text) !important; border-bottom: 2px solid var(--accent) !important; }}
+        [data-testid="stTabs"] [role="tablist"] {{ gap: 6px; border-bottom: 1px solid var(--border); }}
 
-        /* ---------- Botones ---------- */
-        .stButton button, .stDownloadButton button {{
-            background-color: var(--surface); color: var(--text);
-            border: 1px solid var(--border); border-radius: 6px;
-            font-weight: 600; transition: border-color 0.15s ease, color 0.15s ease;
-        }}
-        .stButton button:hover, .stDownloadButton button:hover {{
-            border-color: var(--accent); color: var(--accent-strong);
-        }}
+        .stButton button, .stDownloadButton button {{ background-color: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-weight: 600; transition: border-color 0.15s ease, color 0.15s ease; }}
+        .stButton button:hover, .stDownloadButton button:hover {{ border-color: var(--accent); color: var(--accent-strong); }}
 
-        /* ---------- Selects, inputs, file uploader ---------- */
-        [data-testid="stFileUploaderDropzone"] {{
-            background: var(--surface); border: 1px dashed var(--border) !important;
-            border-radius: 8px;
-        }}
+        [data-testid="stFileUploaderDropzone"] {{ background: var(--surface); border: 1px dashed var(--border) !important; border-radius: 10px; }}
         [data-testid="stFileUploaderDropzone"]:hover {{ border-color: var(--accent) !important; }}
-        .stSelectbox div[data-baseweb="select"] > div, .stMultiSelect div[data-baseweb="select"] > div {{
-            background-color: var(--surface); border-color: var(--border);
+
+        [data-testid="stSelectbox"] input {{
+            background-color: var(--surface) !important; color: var(--text) !important;
         }}
+        [data-testid="stSelectbox"] [role="group"] {{
+            background-color: var(--surface) !important; border-color: var(--border) !important;
+        }}
+        /* st.multiselect todavía usa BaseWeb (data-baseweb="select"), a
+           diferencia de st.selectbox que migró a react-aria — necesita su
+           propio selector. */
+        [data-testid="stMultiSelect"] div[data-baseweb="select"] > div {{
+            background-color: var(--surface) !important; border-color: var(--border) !important;
+        }}
+        [data-testid="stMultiSelect"] input {{ color: var(--text) !important; }}
+        /* El listado desplegable (opciones) es un portal fuera de .stApp,
+           igual que el popover — cubre tanto el combobox nuevo (role=listbox)
+           como el menú de BaseWeb (data-baseweb="menu"). */
+        [role="listbox"], [data-baseweb="menu"], [data-baseweb="popover"] {{ background: var(--surface) !important; border: 1px solid var(--border) !important; color: var(--text) !important; }}
+        [role="option"], [data-baseweb="menu"] li {{ background: var(--surface) !important; color: var(--text) !important; }}
+        [role="option"]:hover, [role="option"][aria-selected="true"], [data-baseweb="menu"] li:hover {{ background: var(--surface-raised) !important; }}
+
         .stTextInput input {{ background-color: var(--surface); border-color: var(--border); color: var(--text); }}
 
-        /* ---------- Accesibilidad: foco de teclado visible ---------- */
         *:focus-visible {{ outline: 2px solid var(--focus) !important; outline-offset: 2px; }}
+        [data-testid="stDataFrame"] {{ border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }}
 
-        /* ---------- Tablas ---------- */
-        [data-testid="stDataFrame"] {{ border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }}
-
-        /* ---------- Pie de página ---------- */
-        .app-footer {{
-            margin-top: 34px; padding-top: 12px; border-top: 1px solid var(--border);
-            font-size: 0.72rem; color: var(--text-muted); display: flex;
-            justify-content: space-between; flex-wrap: wrap; gap: 6px;
+        /* ---------- Barra superior nativa de Streamlit (Deploy / menú ⋮) ---------- */
+        [data-testid="stHeader"] {{ background: transparent; }}
+        [data-testid="stAppDeployButton"] button, [data-testid="stMainMenuButton"] {{
+            color: var(--text) !important; background: transparent !important;
         }}
+
+        .app-footer {{ margin-top: 34px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 0.72rem; color: var(--text-muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; }}
+
+        /* ---------- Interruptor de modo (st.toggle) ---------- */
+        [data-testid="stToggle"] {{ display: flex; justify-content: flex-end; }}
+
+        /* ---------- Barra de control (contenedor con borde nativo) ---------- */
+        [data-testid="stVerticalBlockBorderWrapper"] {{
+            background: var(--surface); border: 1px solid var(--border) !important;
+            border-radius: 10px;
+        }}
+        .control-bar-info {{ font-size: 0.92rem; color: var(--text); display: flex; align-items: center; height: 100%; }}
+        .control-bar-info b {{ font-weight: 600; }}
+        .periodo-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 5px 0 10px; }}
+        .periodo-dot:first-of-type {{ margin-left: 6px; }}
+        .periodo-dot.a {{ background: var(--periodo-a); }}
+        .periodo-dot.b {{ background: var(--periodo-b); }}
+
+        /* ---------- Toggle "Vista simple / Comparar periodos" (st.segmented_control) ---------- */
+        [data-testid="stSegmentedControl"] label {{ font-weight: 600 !important; }}
+        [data-testid="stSegmentedControl"] button {{
+            background-color: var(--surface) !important; color: var(--text) !important;
+            border-color: var(--border) !important;
+        }}
+
+        /* ---------- Botón "Editar" (st.popover) ---------- */
+        [data-testid="stPopover"] > div > button {{
+            background-color: var(--surface-raised); border: 1px solid var(--border);
+            color: var(--text); font-weight: 600; border-radius: 6px;
+        }}
+        [data-testid="stPopover"] > div > button:hover {{ border-color: var(--accent); color: var(--accent-strong); }}
+
+        /* stPopoverBody se renderiza en un portal fuera de .stApp, así que
+           el color: var(--text) heredado de html/body/.stApp no le llega
+           — hay que fijarlo acá explícitamente o queda con el tema nativo
+           de Streamlit (que sigue el modo claro/oscuro del sistema
+           operativo, no nuestro interruptor). */
+        [data-testid="stPopoverBody"] {{
+            background: var(--surface) !important; border: 1px solid var(--border) !important;
+            color: var(--text) !important;
+        }}
+        [data-testid="stPopoverBody"] * {{ color: var(--text); }}
+        [data-testid="stPopoverBody"] [data-testid="stCaptionContainer"] {{ color: var(--text-muted) !important; }}
+
+        /* ---------- Etiquetas de widgets (selectbox, multiselect, etc.) ---------- */
+        [data-testid="stWidgetLabel"] p {{ color: var(--text) !important; }}
+        [data-testid="stCaptionContainer"] {{ color: var(--text-muted) !important; }}
+
+        /* ---------- Uploader de archivos: texto de instrucciones ---------- */
+        [data-testid="stFileUploaderDropzoneInstructions"] {{ color: var(--text) !important; }}
+        [data-testid="stFileUploaderDropzoneInstructions"] * {{ color: inherit !important; }}
+        [data-testid="stFileUploaderDropzoneInstructions"] small {{ color: var(--text-muted) !important; }}
+
+        /* ---------- Tablas (st.dataframe): el grid interno se dibuja en
+           canvas y sigue el tema nativo de Streamlit (fijado en modo claro
+           vía .streamlit/config.toml); esto solo cubre el marco/scrollbar. ---------- */
+        [data-testid="stDataFrame"] {{ background: var(--surface); }}
         </style>
     """, unsafe_allow_html=True)
 
 
-def render_header():
-    """Encabezado de marca: título + subtítulo + cinta de libro mayor (firma visual)."""
-    st.markdown(
-        '<div class="app-header"><h1><span class="marca-icono">☕</span>'
-        'Consola Ejecutiva · Dark Coffee BI</h1></div>'
-        '<div class="app-subtitulo">Business Intelligence · Ventas &amp; Rendimiento Comercial</div>',
-        unsafe_allow_html=True
-    )
+def render_header(modo_actual: str = "claro") -> str:
+    """Encabezado de marca: título + subtítulo + interruptor claro/oscuro en
+    la misma fila + cinta (firma visual). Devuelve el modo activo luego de
+    leer el interruptor (puede haber cambiado en este mismo rerun)."""
+    col_titulo, col_switch = st.columns([6, 1])
+    with col_titulo:
+        st.markdown(
+            '<div class="app-header"><h1><span class="marca-icono"></span>'
+            'Cauce Comercial</h1></div>'
+            '<div class="app-subtitulo">Business Intelligence · Ventas &amp; Rendimiento Comercial</div>',
+            unsafe_allow_html=True
+        )
+    with col_switch:
+        oscuro = st.toggle(
+            "Modo oscuro", value=(modo_actual == "oscuro"), key="switch_modo_tema"
+        )
+    modo_nuevo = "oscuro" if oscuro else "claro"
+    st.session_state["modo_tema"] = modo_nuevo
     ledger_tape()
+    return modo_nuevo
 
 
 def ledger_tape(compacta: bool = False):
-    """La firma visual del sistema: una regla tipo columna de libro contable.
-    Úsala bajo el header (default) o como separador discreto entre bloques
-    grandes de contenido pasando compacta=True."""
     clase = "ledger-tape compacta" if compacta else "ledger-tape"
     marcas = "".join("<span></span>" for _ in range(14))
     st.markdown(f'<div class="{clase}"><div class="marcas">{marcas}</div></div>', unsafe_allow_html=True)
 
 
 def section_title(texto: str):
-    """Título de sección con la marca visual del sistema (cuadradito de acento)."""
     st.markdown(f'<div class="sub-seccion">{texto}</div>', unsafe_allow_html=True)
 
 
 def periodo_banner(texto: str):
-    """Banner que muestra el/los periodo(s) analizado(s)."""
     st.markdown(f'<div class="periodo-header">📌 {texto}</div>', unsafe_allow_html=True)
 
 
 def kpi_row(items: list):
-    """
-    Fila de tarjetas KPI con color de marca propio (reemplazo opcional de
-    st.metric para las 4 métricas clave: Venta, Kilos, Ticket, Clientes).
-
-    items: lista de dicts, cada uno:
-      {
-        "label": "Venta Total (A)",
-        "valor": "$211.083.192 CLP",
-        "delta": "+4.3% vs A",       # opcional
-        "signo": "pos" | "neg" | "neutro",   # opcional, define el color del delta
-      }
-
-    Ejemplo de uso (reemplaza a kpi_a1.metric(...) etc.):
-        theme.kpi_row([
-            {"label": "Venta Total (A)", "valor": f"${v_a:,.0f} CLP"},
-            {"label": "Volumen Kilos (A)", "valor": f"{k_a:,.0f} kg"},
-            {"label": "Ticket Promedio (A)", "valor": f"${t_a:,.0f} CLP"},
-            {"label": "Clientes Activos (A)", "valor": f"{c_a:,}"},
-        ])
-    """
     tarjetas = []
     for item in items:
         label = _html.escape(str(item.get("label", "")))
@@ -320,8 +328,6 @@ def kpi_row(items: list):
 
 
 def signo_delta(delta_pct: float) -> str:
-    """Traduce un % de variación al signo de color esperado por kpi_row
-    ('pos'/'neg'/'neutro'), evitando repetir este if/else en cada vista."""
     if delta_pct > 0:
         return "pos"
     if delta_pct < 0:
@@ -330,10 +336,7 @@ def signo_delta(delta_pct: float) -> str:
 
 
 def render_footer(nombre_archivo: str = None, filas: int = None):
-    """Pie de página discreto con contexto de la sesión (qué archivo se
-    cargó y cuántas filas), útil para que quien lee el dashboard sepa qué
-    datos está viendo sin tener que desplazarse hacia arriba."""
-    izquierda = "☕ Dark Coffee BI · procesado localmente en tu navegador"
+    izquierda = "Cauce Comercial · procesado localmente en tu navegador"
     derecha = ""
     if nombre_archivo:
         derecha = _html.escape(nombre_archivo)

@@ -33,12 +33,10 @@ def render(df_a, df_b, df_dual, modo, label_a, label_b, color_map):
 
     theme.ledger_tape(compacta=True)
 
-    theme.section_title(f"🔵 Indicadores del Vendedor: {label_a}" + (" (Periodo Base)" if modo == "Comparativa (A vs B)" else ""))
     kpis_a_vend = calcular_kpis(df_a_t3)
 
     if modo == "Comparativa (A vs B)":
-        kpis_b_vend = calcular_kpis(df_b_t3)
-
+        theme.section_title(f"🟠 Indicadores del Vendedor: {label_a} (Periodo Base)")
         theme.kpi_row([
             {"label": "Venta Total (A)", "valor": f"${kpis_a_vend['venta']:,.0f} CLP"},
             {"label": "Volumen Kilos (A)", "valor": f"{kpis_a_vend['kilos']:,.0f} kg"},
@@ -46,12 +44,14 @@ def render(df_a, df_b, df_dual, modo, label_a, label_b, color_map):
             {"label": "Clientes Activos (A)", "valor": f"{kpis_a_vend['clientes']:,}"},
         ])
 
+        kpis_b_vend = calcular_kpis(df_b_t3)
+
         d_v = ((kpis_b_vend['venta'] - kpis_a_vend['venta']) / kpis_a_vend['venta'] * 100) if kpis_a_vend['venta'] > 0 else 0
         d_k = ((kpis_b_vend['kilos'] - kpis_a_vend['kilos']) / kpis_a_vend['kilos'] * 100) if kpis_a_vend['kilos'] > 0 else 0
         d_t = ((kpis_b_vend['ticket'] - kpis_a_vend['ticket']) / kpis_a_vend['ticket'] * 100) if kpis_a_vend['ticket'] > 0 else 0
         d_c = ((kpis_b_vend['clientes'] - kpis_a_vend['clientes']) / kpis_a_vend['clientes'] * 100) if kpis_a_vend['clientes'] > 0 else 0
 
-        theme.section_title(f"🟠 Indicadores del Vendedor: {label_b} (Periodo Comparativo)")
+        theme.section_title(f"🟢 Indicadores del Vendedor: {label_b} (Periodo Comparativo)")
         theme.kpi_row([
             {"label": "Venta Total (B)", "valor": f"${kpis_b_vend['venta']:,.0f} CLP", "delta": f"{d_v:+.1f}% vs A", "signo": theme.signo_delta(d_v)},
             {"label": "Volumen Kilos (B)", "valor": f"{kpis_b_vend['kilos']:,.0f} kg", "delta": f"{d_k:+.1f}% vs A", "signo": theme.signo_delta(d_k)},
@@ -59,6 +59,7 @@ def render(df_a, df_b, df_dual, modo, label_a, label_b, color_map):
             {"label": "Clientes Activos (B)", "valor": f"{kpis_b_vend['clientes']:,}", "delta": f"{d_c:+.1f}% vs A", "signo": theme.signo_delta(d_c)},
         ])
     else:
+        theme.section_title(f"🔵 Indicadores del Vendedor: {label_a}")
         theme.kpi_row([
             {"label": "Venta Total", "valor": f"${kpis_a_vend['venta']:,.0f} CLP"},
             {"label": "Volumen Kilos", "valor": f"{kpis_a_vend['kilos']:,.0f} kg"},
@@ -187,13 +188,13 @@ def _seccion_top20_clientes(df_a_t3, df_b_t3, df_dual_t3, modo, label_a, label_b
 
     fig = px.bar(
         df_plot, y='Nombre Cliente', x='Total Línea', color='Periodo', barmode='group',
-        orientation='h', template="plotly_dark",
+        orientation='h',
         category_orders={'Nombre Cliente': orden},
         labels={'Total Línea': 'Venta ($ CLP)', 'Nombre Cliente': 'Cliente'},
         color_discrete_map=color_map
     )
-    fig.update_layout(height=650, xaxis_tickprefix="$", xaxis_tickformat=",.")
-    st.plotly_chart(fig, width='stretch')
+    fig.update_layout(**theme.plotly_layout_kwargs(), height=650, xaxis_tickprefix="$", xaxis_tickformat=",.")
+    st.plotly_chart(fig, width='stretch', theme=None)
 
     excel_top = generar_excel_bonito({'Top20_Clientes': (df_plot, {'Total Línea': 'moneda'})})
     st.download_button("📥 Descargar Datos Excel", excel_top, "grafico_top20_clientes.xlsx", key="dl_top_cli", width='stretch')
