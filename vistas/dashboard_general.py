@@ -118,21 +118,50 @@ def _seccion_plan_mensual(df: pd.DataFrame):
 
     df_mes = df[(df['Año'] == fecha_ref.year) & (df['Mes_Num'] == fecha_ref.month)]
 
-    # Ojo: antes esto cruzaba solo por 'Vendedor' con un LEFT join desde
-    # el plan. Eso rompía la "Venta Acumulada del Mes" de dos formas:
-    # (1) un vendedor con venta pero que no está en el plan (nuevo, o con
-    # el nombre escrito distinto) quedaba totalmente afuera de la suma;
-    # (2) un vendedor que aparece en más de una Zona en el plan tenía dos
-    # filas con el mismo nombre, y el merge le repetía (duplicaba) toda
-    # su venta del mes en cada una — inflando el total. Cruzar por
-    # ['Zona', 'Vendedor'] con un OUTER join evita ambos casos.
-    if 'Zona' in df_mes.columns and 'Zona' in plan.columns:
-        venta_mes = df_mes.groupby(['Zona', 'Vendedor'], as_index=False).agg(Venta=('Total Línea', 'sum'))
-        comparativo = pd.merge(plan, venta_mes, on=['Zona', 'Vendedor'], how='outer')
-    else:
-        venta_mes = df_mes.groupby('Vendedor', as_index=False).agg(Venta=('Total Línea', 'sum'))
-        plan_por_vendedor = plan.groupby('Vendedor', as_index=False)['Meta'].sum()
-        comparativo = pd.merge(plan_por_vendedor, venta_mes, on='Vendedor', how='outer')
+    # Ojo: antes esto cruzaba por ['Zona', 'Vendedor']. El problema es que
+    # la Zona de un vendedor en el plan no siempre calza con la Zona que
+    # trae ese mismo vendedor en las ventas de ese mes (typos, "RM" vs
+    # "Región Metropolitana", una venta puntual registrada con otra zona,
+    # etc.) — y cuando no calzan, el mismo vendedor termina en DOS filas:
+    # una con su Meta pero sin Venta, y otra con su Venta pero sin Meta,
+    # en vez de una sola fila con ambas cosas juntas. Por eso el cruce va
+    # solo por Vendedor (normalizado: sin espacios extra, sin distinguir
+    # mayúsculas/minúsculas); si un vendedor aparece más de una vez en el
+    # plan (varias zonas) se suman sus metas, y la Zona que se muestra es
+    # la del plan (o la de las ventas si no está en el plan).
+    hay_zona = 'Zona' in plan.columns or ('Zona' in df_mes.columns)
+
+    plan = plan.copy()
+    plan['Vendedor'] = plan['Vendedor'].astype(str).str.strip()
+    if 'Zona' in plan.columns:
+        plan['Zona'] = plan['Zona'].astype(str).str.strip()
+    plan['_vend_key'] = plan['Vendedor'].str.casefold()
+
+    df_mes = df_mes.copy()
+    df_mes['Vendedor'] = df_mes['Vendedor'].astype(str).str.strip()
+    if 'Zona' in df_mes.columns:
+        df_mes['Zona'] = df_mes['Zona'].astype(str).str.strip()
+    df_mes['_vend_key'] = df_mes['Vendedor'].str.casefold()
+
+    agg_plan = {'Meta': ('Meta', 'sum'), 'Vendedor': ('Vendedor', 'first')}
+    if 'Zona' in plan.columns:
+        agg_plan['Zona'] = ('Zona', 'first')
+    plan_agg = plan.groupby('_vend_key', as_index=False).agg(**agg_plan)
+
+    agg_venta = {'Venta': ('Total Línea', 'sum'), 'Vendedor': ('Vendedor', 'first')}
+    if 'Zona' in df_mes.columns:
+        agg_venta['Zona'] = ('Zona', 'first')
+    venta_mes = df_mes.groupby('_vend_key', as_index=False).agg(**agg_venta)
+
+    comparativo = pd.merge(plan_agg, venta_mes, on='_vend_key', how='outer', suffixes=('', '_venta'))
+    comparativo['Vendedor'] = comparativo['Vendedor'].fillna(comparativo.pop('Vendedor_venta'))
+    if 'Zona_venta' in comparativo.columns:
+        if 'Zona' in comparativo.columns:
+            comparativo['Zona'] = comparativo['Zona'].fillna(comparativo.pop('Zona_venta'))
+        else:
+            comparativo['Zona'] = comparativo.pop('Zona_venta')
+    comparativo = comparativo.drop(columns=['_vend_key'])
+    if not hay_zona:
         comparativo['Zona'] = comparativo.get('Zona', '')
 
     comparativo['Zona'] = comparativo['Zona'].fillna('Sin Zona')

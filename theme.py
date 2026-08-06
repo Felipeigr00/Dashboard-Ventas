@@ -232,13 +232,17 @@ def inyectar_css(modo: str = "claro"):
         /* ---------- st.segmented_control (toggle Vista/Comparar, píldoras de Año/Mes) ----------
            Ojo: el wrapper real tiene testid "stButtonGroup", no
            "stSegmentedControl" (ese testid no existe en esta versión de
-           Streamlit) — por eso esto nunca calzaba antes. */
+           Streamlit) — por eso esto nunca calzaba antes. Selección única
+           (Vista, Año) marca el botón con aria-checked="true"; selección
+           múltiple (Mes(es)) lo marca con aria-pressed="true" en su lugar
+           — hay que cubrir ambos o los meses elegidos no se remarcan. */
         [data-testid="stButtonGroup"] label {{ font-weight: 600 !important; }}
         [data-testid="stButtonGroup"] button {{
             background-color: var(--surface) !important; color: var(--text) !important;
             border-color: var(--border) !important;
         }}
-        [data-testid="stButtonGroup"] button[aria-checked="true"] {{
+        [data-testid="stButtonGroup"] button[aria-checked="true"],
+        [data-testid="stButtonGroup"] button[aria-pressed="true"] {{
             background-color: var(--surface) !important; color: var(--accent-strong) !important;
             border: 2px solid var(--accent) !important; font-weight: 700 !important;
         }}
