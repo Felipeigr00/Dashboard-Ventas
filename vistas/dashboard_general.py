@@ -57,6 +57,10 @@ def render(df_a, df_b, df_dual, modo, label_a, label_b, color_map, df_completo):
 
     theme.ledger_tape(compacta=True)
 
+    _seccion_ventas_mensuales_por_anio(df_completo)
+
+    st.divider()
+
     col_dash1, col_dash2 = st.columns(2)
 
     with col_dash1:
@@ -207,6 +211,35 @@ def _seccion_plan_mensual(df: pd.DataFrame):
         "📥 Descargar Excel", excel_plan, "cumplimiento_meta_mensual.xlsx",
         key="dl_plan_mensual", width='stretch'
     )
+
+
+def _seccion_ventas_mensuales_por_anio(df: pd.DataFrame):
+    if 'Año' not in df.columns or 'Mes_Num' not in df.columns or 'Total Línea' not in df.columns:
+        return
+
+    theme.section_title("📈 Ventas Mensuales por Año")
+
+    df_mensual = df.groupby(['Año', 'Mes_Num'], as_index=False)['Total Línea'].sum()
+    df_mensual['Mes'] = df_mensual['Mes_Num'].map(MESES_MAP)
+    df_mensual['Año'] = df_mensual['Año'].astype(int).astype(str)
+    orden_meses = list(MESES_MAP.values())
+
+    paleta_anios = [theme.COLOR_PERIODO_A, theme.COLOR_PERIODO_B, theme.COLOR_ACCENT,
+                    theme.COLOR_FOCUS, theme.COLOR_NEGATIVE, theme.COLOR_ACCENT_STRONG]
+    anios_ordenados = sorted(df_mensual['Año'].unique().tolist())
+    color_map_anios = {anio: paleta_anios[i % len(paleta_anios)] for i, anio in enumerate(anios_ordenados)}
+
+    fig = px.bar(
+        df_mensual, x='Mes', y='Total Línea', color='Año', barmode='group',
+        category_orders={'Mes': orden_meses},
+        labels={'Total Línea': 'Venta ($ CLP)', 'Mes': ''},
+        color_discrete_map=color_map_anios,
+    )
+    fig.update_layout(**theme.plotly_layout_kwargs(), yaxis_tickprefix="$", yaxis_tickformat=",.", height=450)
+    st.plotly_chart(fig, width='stretch', theme=None)
+
+    excel_mensual = generar_excel_bonito({'Ventas Mensuales': (df_mensual[['Año', 'Mes', 'Total Línea']], {'Total Línea': 'moneda'})})
+    st.download_button("📥 Descargar Datos Excel", excel_mensual, "ventas_mensuales_por_anio.xlsx", key="dl_ventas_mensuales", width='stretch')
 
 
 def _uploader_plan_mensual():
