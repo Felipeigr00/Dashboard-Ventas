@@ -22,7 +22,7 @@ import streamlit as st
 
 import theme
 from carga_datos import procesar_archivos_subidos
-from vistas import dashboard_general, analisis_productos, analisis_clientes, analisis_vendedores, datos_resumen
+from vistas import dashboard_general, analisis_productos, analisis_clientes, analisis_vendedores, datos_resumen, mi_dashboard
 
 MESES_MAP = {1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio',
              7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'}
@@ -215,12 +215,13 @@ try:
     # PESTAÑAS
     # ----------------------------------------------------------------------
     if not df_a.empty or (modo == "Comparativa (A vs B)" and not df_b.empty):
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📊 Dashboard General",
             "🛍️ Análisis de Productos",
             "👥 Análisis de Clientes",
             "🧑‍💼 Análisis de Vendedor",
-            "📂 Datos y Resúmenes"
+            "📂 Datos y Resúmenes",
+            "🧩 Mi Dashboard"
         ])
 
         with tab1:
@@ -237,6 +238,13 @@ try:
 
         with tab5:
             datos_resumen.render(df_a, df_b, df_dual, modo, label_a, label_b, col_sort_tabla, col_prod)
+
+        with tab6:
+            # Histórico completo (df), no el filtrado por Zona/Periodo de
+            # arriba: el constructor tiene su propio filtro de Año/Mes, y
+            # así puede comparar entre zonas o periodos que el filtro global
+            # de la parte de arriba ya haya dejado afuera.
+            mi_dashboard.render(df)
     else:
         st.warning("No se encontraron registros para los periodos seleccionados.")
 
