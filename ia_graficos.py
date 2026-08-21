@@ -47,7 +47,7 @@ URL_API_KEY = {
     "groq": "https://console.groq.com/keys",
 }
 
-MODELO_DEFAULT = {"gemini": "gemini-flash-latest", "groq": "llama-3.3-70b-versatile"}
+MODELO_DEFAULT = {"gemini": "gemini-flash-latest", "groq": "openai/gpt-oss-120b"}
 _URL_GEMINI_TMPL = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={key}"
 _URL_GROQ = "https://api.groq.com/openai/v1/chat/completions"
 _TIMEOUT_SEG = 30
@@ -118,6 +118,33 @@ def _schema_a_instrucciones_texto(schema: dict) -> str:
     return '\n'.join(lineas)
 
 
+def _post_con_reintentos(nombre_proveedor: str, **kwargs_post):
+    """POST con reintento ante saturación temporal (ver _CODIGOS_REINTENTABLES)
+    Y ante fallas de conexión/timeout — antes solo se reintentaban los
+    códigos HTTP y un timeout de red se rendía al primer intento, cuando
+    los timeouts de Gemini/Groq bajo carga son igual de transitorios que
+    un 503. Devuelve la Response final, o lanza ErrorIA si se agotan los
+    reintentos sin una respuesta utilizable."""
+    resp = None
+    ultimo_error_conexion = None
+    for intento in range(_INTENTOS):
+        try:
+            resp = requests.post(timeout=_TIMEOUT_SEG, **kwargs_post)
+            ultimo_error_conexion = None
+        except requests.exceptions.RequestException as e:
+            ultimo_error_conexion = e
+            resp = None
+
+        if resp is not None and resp.status_code not in _CODIGOS_REINTENTABLES:
+            break
+        if intento < _INTENTOS - 1:
+            time.sleep(_ESPERA_SEG[min(intento, len(_ESPERA_SEG) - 1)])
+
+    if resp is None:
+        raise ErrorIA(f"No se pudo contactar a {nombre_proveedor} (revisa tu conexión), incluso reintentando {_INTENTOS} veces: {ultimo_error_conexion}")
+    return resp
+
+
 def _llamar_gemini(instrucciones: str, schema: dict, api_key: str, modelo: str) -> dict:
     """POST a Gemini pidiendo salida JSON forzada por 'schema', con
     reintento automático ante saturación temporal (ver _CODIGOS_REINTENTABLES).
@@ -131,18 +158,7 @@ def _llamar_gemini(instrucciones: str, schema: dict, api_key: str, modelo: str) 
         },
     }
     url = _URL_GEMINI_TMPL.format(modelo=modelo, key=api_key)
-
-    resp = None
-    for intento in range(_INTENTOS):
-        try:
-            resp = requests.post(url, json=body, timeout=_TIMEOUT_SEG)
-        except requests.exceptions.RequestException as e:
-            raise ErrorIA(f"No se pudo contactar a Gemini (revisa tu conexión): {e}") from e
-
-        if resp.status_code not in _CODIGOS_REINTENTABLES:
-            break
-        if intento < _INTENTOS - 1:
-            time.sleep(_ESPERA_SEG[min(intento, len(_ESPERA_SEG) - 1)])
+    resp = _post_con_reintentos("Gemini", url=url, json=body)
 
     if resp.status_code == 400:
         raise ErrorIA("La API key de Gemini no es válida, o la petición fue rechazada. Revisa que la copiaste completa.")
@@ -183,18 +199,7 @@ def _llamar_groq(instrucciones: str, schema: dict, api_key: str, modelo: str) ->
         "temperature": 0.1,
     }
     headers = {"Authorization": f"Bearer {api_key}"}
-
-    resp = None
-    for intento in range(_INTENTOS):
-        try:
-            resp = requests.post(_URL_GROQ, json=body, headers=headers, timeout=_TIMEOUT_SEG)
-        except requests.exceptions.RequestException as e:
-            raise ErrorIA(f"No se pudo contactar a Groq (revisa tu conexión): {e}") from e
-
-        if resp.status_code not in _CODIGOS_REINTENTABLES:
-            break
-        if intento < _INTENTOS - 1:
-            time.sleep(_ESPERA_SEG[min(intento, len(_ESPERA_SEG) - 1)])
+    resp = _post_con_reintentos("Groq", url=_URL_GROQ, json=body, headers=headers)
 
     if resp.status_code == 401:
         raise ErrorIA("La API key de Groq no es válida. Revisa que la copiaste completa.")
